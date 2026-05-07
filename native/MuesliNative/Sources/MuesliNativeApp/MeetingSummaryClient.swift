@@ -779,10 +779,7 @@ enum MeetingSummaryClient {
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
-            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode >= 400 {
-                fputs("[summary] Ollama title generation: HTTP \(httpResponse.statusCode)\n", stderr)
-                return nil
-            }
+            try validateHTTPResponse(response, data: data, backend: "Ollama")
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let message = json["message"] as? [String: Any],
                   let content = message["content"] as? String,
@@ -793,6 +790,9 @@ enum MeetingSummaryClient {
             let title = content.trimmingCharacters(in: .whitespacesAndNewlines.union(.init(charactersIn: "\"")))
             fputs("[summary] Ollama generated title: \(title)\n", stderr)
             return title
+        } catch let error as MeetingSummaryError {
+            fputs("[summary] Ollama title generation failed: \(error.localizedDescription)\n", stderr)
+            return nil
         } catch {
             fputs("[summary] Ollama title generation failed: \(error)\n", stderr)
             return nil
