@@ -84,7 +84,6 @@ struct SettingsView: View {
     @AppStorage("settings.pendingScreenContextRequestedAt") private var pendingScreenContextRequestedAt = 0.0
     @State private var systemAudioGranted = false
     @State private var isCheckingSystemAudioPermission = false
-    @State private var voiceNotesUpgradeMessage: String?
     @State private var openRouterFreeModels: [SummaryModelPreset] = []
     @State private var isLoadingOpenRouterFreeModels = false
     @State private var openRouterFreeModelsError: String?
@@ -116,13 +115,6 @@ struct SettingsView: View {
 
     private var selectedCohereLanguage: CohereTranscribeLanguage {
         appState.config.resolvedCohereLanguage
-    }
-
-    private var canUpgradeVoiceNotesToDictation: Bool {
-        appState.config.resolvedOnboardingUseCase == .voiceNotes
-            && micGranted
-            && accessibilityGranted
-            && inputMonitoringGranted
     }
 
     var body: some View {
@@ -1024,10 +1016,6 @@ struct SettingsView: View {
 
     private var permissionsSection: some View {
         settingsSection("Permissions") {
-            if appState.config.resolvedOnboardingUseCase == .voiceNotes {
-                voiceNotesUpgradePrompt
-                Divider().background(MuesliTheme.surfaceBorder)
-            }
             permissionStatusRow(
                 "Microphone",
                 granted: micGranted,
@@ -1074,54 +1062,6 @@ struct SettingsView: View {
                 )
             }
         }
-    }
-
-    private var voiceNotesUpgradePrompt: some View {
-        HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
-            VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                Text("Voice Notes mode")
-                    .font(MuesliTheme.body())
-                    .foregroundStyle(MuesliTheme.textPrimary)
-                Text(voiceNotesUpgradeCopy)
-                    .font(MuesliTheme.caption())
-                    .foregroundStyle(MuesliTheme.textSecondary)
-                    .lineLimit(2)
-                if let voiceNotesUpgradeMessage {
-                    Text(voiceNotesUpgradeMessage)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(MuesliTheme.success)
-                }
-            }
-            Spacer(minLength: MuesliTheme.spacing16)
-            Button("Upgrade to Dictation") {
-                controller.promoteVoiceNotesToDictationIfReady(
-                    microphoneGranted: micGranted,
-                    accessibilityGranted: accessibilityGranted,
-                    inputMonitoringGranted: inputMonitoringGranted
-                )
-                voiceNotesUpgradeMessage = "Dictation enabled. Push to Talk will now paste into active apps."
-            }
-            .buttonStyle(.plain)
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(canUpgradeVoiceNotesToDictation ? MuesliTheme.accent : MuesliTheme.textTertiary)
-            .padding(.horizontal, MuesliTheme.spacing12)
-            .padding(.vertical, MuesliTheme.spacing8)
-            .background(canUpgradeVoiceNotesToDictation ? MuesliTheme.accentSubtle : MuesliTheme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-            .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
-                    .strokeBorder(canUpgradeVoiceNotesToDictation ? MuesliTheme.accent.opacity(0.25) : MuesliTheme.surfaceBorder, lineWidth: 1)
-            )
-            .disabled(!canUpgradeVoiceNotesToDictation)
-        }
-        .frame(minHeight: 48)
-    }
-
-    private var voiceNotesUpgradeCopy: String {
-        if canUpgradeVoiceNotesToDictation {
-            return "Dictation permissions are ready. Upgrade only if you want Push to Talk to paste into other apps."
-        }
-        return "Grant Accessibility to enable paste dictation. Voice Notes will keep saving inside Muesli."
     }
 
     @ViewBuilder
