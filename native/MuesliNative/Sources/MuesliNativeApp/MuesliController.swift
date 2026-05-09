@@ -141,6 +141,7 @@ final class MuesliController: NSObject {
     private var computerUseFloatingStatusWorkItem: DispatchWorkItem?
     private var computerUseLastFloatingStatusAt = Date.distantPast
     private var computerUseLastFloatingStatus = ""
+    private var computerUseTranscriptVisible = false
     private let computerUseFloatingStatusMinimumDwell: TimeInterval = 0.85
     private var _streamingDictationController: Any?  // StreamingDictationController (macOS 15+)
     private var isNemotronStreaming = false
@@ -219,7 +220,9 @@ final class MuesliController: NSObject {
         computerUseHotkeyMonitor.onStart = { [weak self] in self?.handleComputerUseStart() }
         computerUseHotkeyMonitor.onStop = { [weak self] in self?.handleComputerUseStop() }
         computerUseHotkeyMonitor.onCancel = { [weak self] in self?.handleComputerUseCancel() }
-        computerUseHotkeyMonitor.doubleTapEnabled = false
+        computerUseHotkeyMonitor.onToggleStart = { [weak self] in self?.handleComputerUseToggleStart() }
+        computerUseHotkeyMonitor.onToggleStop = { [weak self] in self?.handleComputerUseToggleStop() }
+        computerUseHotkeyMonitor.doubleTapEnabled = config.enableDoubleTapDictation
         let canRunMainApp = config.hasCompletedOnboarding
             && hasRequiredStartupPermissions(for: config.resolvedOnboardingUseCase)
 
@@ -236,14 +239,24 @@ final class MuesliController: NSObject {
             guard let self else { return }
             if self.hotkeyMonitor.isToggleRecording {
                 self.hotkeyMonitor.stopToggleMode()
+            } else if self.computerUseHotkeyMonitor.isToggleRecording {
+                self.computerUseHotkeyMonitor.stopToggleMode()
+            } else if self.computerUseCommandStartedAt != nil {
+                self.handleComputerUseStop()
             } else {
                 self.handleStop()
             }
         }
         indicator.onCancelToggleDictation = { [weak self] in
-            self?.handleCancel()
-            self?.indicator.isToggleDictation = false
-            self?.hotkeyMonitor.cancelToggleMode()
+            guard let self else { return }
+            if self.computerUseHotkeyMonitor.isToggleRecording || self.computerUseCommandStartedAt != nil {
+                self.handleComputerUseCancel()
+                self.computerUseHotkeyMonitor.cancelToggleMode()
+            } else {
+                self.handleCancel()
+                self.hotkeyMonitor.cancelToggleMode()
+            }
+            self.indicator.isToggleDictation = false
         }
         indicator.onPositionSaved = { [weak self] center in
             self?.updateConfig {
@@ -584,6 +597,8 @@ final class MuesliController: NSObject {
         statusBarController?.refresh()
         statusBarController?.refreshIcon()
         indicator.refreshIcon()
+        hotkeyMonitor.doubleTapEnabled = config.enableDoubleTapDictation
+        computerUseHotkeyMonitor.doubleTapEnabled = config.enableDoubleTapDictation
         historyWindowController?.updateBackendLabel()
         if config.showFloatingIndicator {
             indicator.ensureVisible(config: config)
@@ -2944,6 +2959,7 @@ final class MuesliController: NSObject {
             fputs("[cua] computer use hotkey disabled because it matches dictation hotkey\n", stderr)
             return
         }
+        computerUseHotkeyMonitor.doubleTapEnabled = config.enableDoubleTapDictation
         computerUseHotkeyMonitor.targetKeyCode = config.computerUseHotkey.keyCode
         computerUseHotkeyMonitor.start()
     }
@@ -3091,18 +3107,36 @@ final class MuesliController: NSObject {
         }
     }
 
+    private func handleComputerUseToggleStart() {
+        guard canStartComputerUseCommand else {
+            computerUseHotkeyMonitor.cancelToggleMode()
+            return
+        }
+        fputs("[cua] toggle command start\n", stderr)
+        indicator.isToggleDictation = true
+        handleComputerUseStart()
+    }
+
+    private func handleComputerUseToggleStop() {
+        fputs("[cua] toggle command stop\n", stderr)
+        indicator.isToggleDictation = false
+        handleComputerUseStop()
+    }
+
     private func handleComputerUseCancel() {
         fputs("[cua] cancel\n", stderr)
         computerUseCommandTask?.cancel()
         computerUseCommandTask = nil
         recorder.cancel()
         computerUseCommandStartedAt = nil
+        indicator.isToggleDictation = false
         setState(.idle)
         meetingMonitor.resumeAfterCooldown()
     }
 
     private func handleComputerUseStop() {
         fputs("[cua] stop\n", stderr)
+        indicator.isToggleDictation = false
         let startedAt = computerUseCommandStartedAt ?? Date()
         computerUseCommandStartedAt = nil
 
@@ -3205,7 +3239,7 @@ final class MuesliController: NSObject {
     @MainActor
     private func handleComputerUseCommand(transcript: String, dictationID: Int64?) async {
         resetComputerUseFloatingStatus()
-        indicator.setTranscribingTitle("Starting CUA", config: config)
+        presentComputerUseTranscript(transcript)
         setState(.transcribing)
         let runtime = ComputerUsePlannerRuntime(config: config) { [weak self] status in
             guard let self else { return }
@@ -3239,6 +3273,15 @@ final class MuesliController: NSObject {
         computerUseFloatingStatusWorkItem = nil
         computerUseLastFloatingStatusAt = .distantPast
         computerUseLastFloatingStatus = ""
+        computerUseTranscriptVisible = false
+    }
+
+    @MainActor
+    private func presentComputerUseTranscript(_ transcript: String) {
+        computerUseTranscriptVisible = true
+        computerUseLastFloatingStatusAt = .distantPast
+        computerUseLastFloatingStatus = ""
+        indicator.showComputerUseTranscript(transcript, config: config)
     }
 
     @MainActor
@@ -3249,6 +3292,9 @@ final class MuesliController: NSObject {
         statusBarController?.setStatus(trimmed)
         guard dictationState == .transcribing else { return }
         guard let floatingStatus = computerUseFloatingStatusLabel(for: trimmed) else { return }
+        if computerUseTranscriptVisible && !shouldReplaceComputerUseTranscript(with: floatingStatus) {
+            return
+        }
         guard floatingStatus != computerUseLastFloatingStatus else { return }
 
         let now = Date()
@@ -3306,6 +3352,14 @@ final class MuesliController: NSObject {
     }
 
     @MainActor
+    private func shouldReplaceComputerUseTranscript(with status: String) -> Bool {
+        if status == "Thinking..." || status == "Reading screen" {
+            return false
+        }
+        return true
+    }
+
+    @MainActor
     private func isConcreteComputerUseFloatingStatus(_ status: String) -> Bool {
         status.hasPrefix("Opening")
             || status.hasPrefix("Opened")
@@ -3324,6 +3378,7 @@ final class MuesliController: NSObject {
 
     @MainActor
     private func applyComputerUseFloatingStatus(_ status: String, at date: Date) {
+        computerUseTranscriptVisible = false
         computerUseLastFloatingStatus = status
         computerUseLastFloatingStatusAt = date
         indicator.setTranscribingTitle(status, config: config)
@@ -3359,6 +3414,8 @@ final class MuesliController: NSObject {
         switch status {
         case .done:
             return "done"
+        case .timedOut:
+            return "timed_out"
         case .needsConfirmation:
             return "confirm"
         case .failed:
@@ -3378,6 +3435,10 @@ final class MuesliController: NSObject {
             message = result.message.hasPrefix("Done") ? result.message : "Done: \(result.message)"
             floatingMessage = "Done"
             icon = ""
+        case .timedOut:
+            message = result.message
+            floatingMessage = "Timed out"
+            icon = "!"
         case .needsConfirmation:
             message = result.message.hasPrefix("Confirm") ? result.message : "Confirm: \(result.message)"
             floatingMessage = "Confirm"
