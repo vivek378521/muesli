@@ -1,9 +1,9 @@
 import AppKit
 import AudioToolbox
 import CoreAudio
+import Darwin
 import Foundation
 import MuesliCore
-import os
 
 /// Protocol for system audio capture backends (ScreenCaptureKit vs CoreAudio tap).
 protocol SystemAudioCapturing: AnyObject {
@@ -26,16 +26,10 @@ protocol SystemAudioCapturing: AnyObject {
 final class CoreAudioSystemRecorder: SystemAudioCapturing {
     var onPCMSamples: (([Int16]) -> Void)?
 
-    private struct RecordingState {
-        var isRecording = false
-        var isPaused = false
-    }
-
     private var tapID: AudioObjectID = kAudioObjectUnknown
     private var aggregateDeviceID: AudioDeviceID = kAudioObjectUnknown
     private var audioUnit: AudioUnit?
     private let processingQueue = DispatchQueue(label: "com.muesli.system-audio-tap")
-    private let recordingStateLock = OSAllocatedUnfairLock(initialState: RecordingState())
     private var defaultOutputDeviceListenerBlock: AudioObjectPropertyListenerBlock?
     private var renderBuffer: UnsafeMutableRawPointer?
     private var renderBufferCapacity = 0
@@ -43,13 +37,15 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing {
     private var outputFile: FileHandle?
     private var outputURL: URL?
     private var totalBytesWritten = 0
+    private var recordingFlag: Int32 = 0
+    private var pausedFlag: Int32 = 0
     private(set) var isRecording: Bool {
-        get { recordingStateLock.withLock { $0.isRecording } }
-        set { recordingStateLock.withLock { $0.isRecording = newValue } }
+        get { Self.atomicLoad(&recordingFlag) }
+        set { Self.atomicStore(&recordingFlag, newValue) }
     }
     private(set) var isPaused: Bool {
-        get { recordingStateLock.withLock { $0.isPaused } }
-        set { recordingStateLock.withLock { $0.isPaused = newValue } }
+        get { Self.atomicLoad(&pausedFlag) }
+        set { Self.atomicStore(&pausedFlag, newValue) }
     }
 
     private static let targetSampleRate: Double = 16_000
@@ -58,6 +54,20 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing {
     /// Source format from the tap (queried at setup time).
     private var sourceSampleRate: Double = 48_000
     private var sourceChannels: UInt32 = 2
+
+    private static func atomicLoad(_ value: UnsafeMutablePointer<Int32>) -> Bool {
+        OSAtomicAdd32Barrier(0, value) != 0
+    }
+
+    private static func atomicStore(_ value: UnsafeMutablePointer<Int32>, _ enabled: Bool) {
+        let newValue: Int32 = enabled ? 1 : 0
+        while true {
+            let current = OSAtomicAdd32Barrier(0, value)
+            if current == newValue || OSAtomicCompareAndSwap32Barrier(current, newValue, value) {
+                return
+            }
+        }
+    }
 
     deinit {
         if isRecording
