@@ -628,6 +628,7 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing {
             try setupAndStartAudioUnit()
             fputs("[system-audio] CoreAudio tap capture restarted for default output device\n", stderr)
         } catch {
+            teardownTapAndAudioUnit()
             isRecording = false
             isPaused = false
             onPCMSamples = nil
