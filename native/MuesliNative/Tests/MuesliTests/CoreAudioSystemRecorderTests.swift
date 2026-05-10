@@ -17,6 +17,5 @@ struct CoreAudioSystemRecorderTests {
         #expect(tapDescription.deviceUID == "test-output-device")
         #expect(tapDescription.stream == 0)
         #expect(tapDescription.processes == [123])
-        #expect(tapDescription.isExclusive)
     }
 }

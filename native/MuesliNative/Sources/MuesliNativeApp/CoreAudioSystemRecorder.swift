@@ -1,7 +1,7 @@
 import AppKit
+import Atomics
 import AudioToolbox
 import CoreAudio
-import Darwin
 import Foundation
 import MuesliCore
 
@@ -37,15 +37,15 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing {
     private var outputFile: FileHandle?
     private var outputURL: URL?
     private var totalBytesWritten = 0
-    private var recordingFlag: Int32 = 0
-    private var pausedFlag: Int32 = 0
+    private let recordingFlag = ManagedAtomic(false)
+    private let pausedFlag = ManagedAtomic(false)
     private(set) var isRecording: Bool {
-        get { Self.atomicLoad(&recordingFlag) }
-        set { Self.atomicStore(&recordingFlag, newValue) }
+        get { recordingFlag.load(ordering: .acquiring) }
+        set { recordingFlag.store(newValue, ordering: .releasing) }
     }
     private(set) var isPaused: Bool {
-        get { Self.atomicLoad(&pausedFlag) }
-        set { Self.atomicStore(&pausedFlag, newValue) }
+        get { pausedFlag.load(ordering: .acquiring) }
+        set { pausedFlag.store(newValue, ordering: .releasing) }
     }
 
     private static let targetSampleRate: Double = 16_000
@@ -54,20 +54,6 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing {
     /// Source format from the tap (queried at setup time).
     private var sourceSampleRate: Double = 48_000
     private var sourceChannels: UInt32 = 2
-
-    private static func atomicLoad(_ value: UnsafeMutablePointer<Int32>) -> Bool {
-        OSAtomicAdd32Barrier(0, value) != 0
-    }
-
-    private static func atomicStore(_ value: UnsafeMutablePointer<Int32>, _ enabled: Bool) {
-        let newValue: Int32 = enabled ? 1 : 0
-        while true {
-            let current = OSAtomicAdd32Barrier(0, value)
-            if current == newValue || OSAtomicCompareAndSwap32Barrier(current, newValue, value) {
-                return
-            }
-        }
-    }
 
     deinit {
         if isRecording
@@ -113,11 +99,11 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing {
         guard isRecording || outputFile != nil || outputURL != nil else { return nil }
         isRecording = false
         isPaused = false
-        onPCMSamples = nil
 
         removeDefaultOutputDeviceListener()
         processingQueue.sync {
             teardownTapAndAudioUnit()
+            onPCMSamples = nil
         }
 
         if let file = outputFile {
