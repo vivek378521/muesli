@@ -6,6 +6,32 @@
         <language>en</language>
         <!-- Items are added by scripts/release-preprod.sh -->
         <item>
+            <title>0.6.7-preprod.1</title>
+            <pubDate>Mon, 11 May 2026 09:49:37 +0530</pubDate>
+            <description><![CDATA[
+<h2>MuesliPreprod 0.6.7-preprod.1</h2>
+<p>Pre-production build for validating the Sparkle update flow before a stable release.</p>
+<h3>Install</h3>
+<ul>
+<li>Download <code>MuesliPreprod-0.6.7-preprod.1.dmg</code></li>
+<li>Open the DMG and drag MuesliPreprod to Applications</li>
+<li>Launch MuesliPreprod from Applications</li>
+</ul>
+<h3>Notes</h3>
+<ul>
+<li>Installs alongside production Muesli.</li>
+<li>Stores data separately in <code>~/Library/Application Support/MuesliPreprod/</code>.</li>
+<li>Uses the pre-production Sparkle feed: <code>https://pHequals7.github.io/muesli/appcast-preprod.xml</code>.</li>
+<li>Does not update the production appcast, public download page, or Homebrew tap.</li>
+</ul>
+]]></description>
+            <sparkle:version>6007001</sparkle:version>
+            <sparkle:shortVersionString>0.6.7-preprod.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>10.13</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/pHequals7/muesli/releases/download/v0.6.7-preprod.1/MuesliPreprod-0.6.7-preprod.1.dmg" length="63383489" type="application/octet-stream" sparkle:edSignature="2ZM9L1nke4qKWaakDQS2A1jMFaA+UGEwxVdFptlr+cztOykNKpJ2pU4mFHcMmZvHOHgTar3nSQTFmT81cLIFCA=="/>
+        </item>
+        <item>
             <title>0.6.6-preprod.1</title>
             <pubDate>Sun, 03 May 2026 14:37:33 +0530</pubDate>
             <sparkle:version>6006001</sparkle:version>
@@ -22,15 +48,6 @@
             <sparkle:minimumSystemVersion>10.13</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <enclosure url="https://github.com/pHequals7/muesli/releases/download/v0.6.5-preprod.3/MuesliPreprod-0.6.5-preprod.3.dmg" length="62609929" type="application/octet-stream" sparkle:edSignature="62gPmoWLwXxjXrzrhqlTN0TVwD2AhRBZrPh5/4n8sBFm2F21jCPrQe9iqqas7phOk5hJWiNek+gZVxT5tef4BA=="/>
-        </item>
-        <item>
-            <title>0.6.5-preprod.2</title>
-            <pubDate>Thu, 30 Apr 2026 15:01:01 +0530</pubDate>
-            <sparkle:version>6005002</sparkle:version>
-            <sparkle:shortVersionString>0.6.5-preprod.2</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>10.13</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/pHequals7/muesli/releases/download/v0.6.5-preprod.2/MuesliPreprod-0.6.5-preprod.2.dmg" length="62609393" type="application/octet-stream" sparkle:edSignature="24PuSNqmHSZTJ4Gb7Wyd1fZoRyjdBw92uVW7qBGlacUhP8QzUgro6pfoPvDX7AZ6XTtxd2KMLppA49ah4bmXBw=="/>
         </item>
     </channel>
 </rss>
