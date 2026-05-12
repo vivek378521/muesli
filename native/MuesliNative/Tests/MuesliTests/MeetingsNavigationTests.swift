@@ -220,6 +220,38 @@ struct MeetingsNavigationTests {
         #expect(updated.formattedNotes == "## Existing notes")
     }
 
+    @Test("retranscribe empty transcript restores original meeting status")
+    func retranscribeEmptyTranscriptRestoresOriginalMeetingStatus() {
+        #expect(MuesliController.retranscriptionFailureStatus(
+            originalStatus: .completed,
+            didSetProcessing: true,
+            error: MeetingRetranscriptionError.emptyTranscript
+        ) == .completed)
+        #expect(MuesliController.retranscriptionFailureStatus(
+            originalStatus: .failed,
+            didSetProcessing: true,
+            error: MeetingRetranscriptionError.emptyTranscript
+        ) == .failed)
+    }
+
+    @Test("retranscribe status is unchanged before processing starts")
+    func retranscribeStatusIsUnchangedBeforeProcessingStarts() {
+        #expect(MuesliController.retranscriptionFailureStatus(
+            originalStatus: .completed,
+            didSetProcessing: false,
+            error: MeetingRetranscriptionError.recordingUnavailable
+        ) == nil)
+    }
+
+    @Test("retranscribe processing failures mark meeting failed")
+    func retranscribeProcessingFailuresMarkMeetingFailed() {
+        #expect(MuesliController.retranscriptionFailureStatus(
+            originalStatus: .completed,
+            didSetProcessing: true,
+            error: MeetingRetranscriptionError.failedToSave(underlying: CocoaError(.fileWriteUnknown))
+        ) == .failed)
+    }
+
     @Test("cached manual notes are persisted before debounce")
     func cachedManualNotesPersistImmediately() throws {
         let store = try makeStore()

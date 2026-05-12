@@ -1991,14 +1991,35 @@ final class MuesliController: NSObject {
                 completion(.success(()))
             } catch {
                 fputs("[muesli-native] failed to re-transcribe meeting \(meeting.id): \(error)\n", stderr)
-                if didSetProcessing {
-                    try? self.dictationStore.updateMeetingStatus(id: meeting.id, status: .failed)
+                if let status = Self.retranscriptionFailureStatus(
+                    originalStatus: meeting.status,
+                    didSetProcessing: didSetProcessing,
+                    error: error
+                ) {
+                    try? self.dictationStore.updateMeetingStatus(id: meeting.id, status: status)
                 }
                 self.syncAppState()
                 self.historyWindowController?.reload()
                 completion(.failure(error))
             }
         }
+    }
+
+    static func retranscriptionFailureStatus(
+        originalStatus: MeetingStatus,
+        didSetProcessing: Bool,
+        error: Error
+    ) -> MeetingStatus? {
+        guard didSetProcessing else { return nil }
+        if let retranscriptionError = error as? MeetingRetranscriptionError {
+            switch retranscriptionError {
+            case .emptyTranscript:
+                return originalStatus
+            case .controllerUnavailable, .recordingUnavailable, .noDownloadedTranscriptionModel, .failedToSave:
+                break
+            }
+        }
+        return .failed
     }
 
     // MARK: - Meeting Editing
