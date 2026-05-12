@@ -110,7 +110,13 @@ final class GoogleCalendarClient {
         }
 
         for calendar in enabled {
-            try await fetchEvents(forCalendarID: calendar.id, daysAhead: daysAhead)
+            do {
+                try await fetchEvents(forCalendarID: calendar.id, daysAhead: daysAhead)
+            } catch let authError as GoogleCalendarAuthError {
+                throw authError
+            } catch {
+                fputs("[google-cal] events fetch failed for \(calendar.id), keeping cached events: \(error)\n", stderr)
+            }
         }
 
         let now = Date()
