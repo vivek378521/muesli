@@ -90,6 +90,8 @@ final class FloatingIndicatorController: NSObject {
     private var barLayers: [CALayer] = []
     private var amplitudeTimer: Timer?
     private var smoothedAmplitude: CGFloat = 0
+    private var waveformAnimationMode: WaveformAnimationMode = .level
+    private var waveformAnimationStartedAt = Date()
     fileprivate var isDragging = false
     var powerProvider: (() -> Float)?
     var onStopMeeting: (() -> Void)?
@@ -105,6 +107,11 @@ final class FloatingIndicatorController: NSObject {
     private var isShowingLoading = false
     private var isComputerUseCursorMode = false
     private var computerUseCursorReturnFrame: NSRect?
+
+    private enum WaveformAnimationMode {
+        case level
+        case waiting
+    }
 
     init(configStore: ConfigStore) {
         self.configStore = configStore
@@ -244,7 +251,7 @@ final class FloatingIndicatorController: NSObject {
         }
         guard let panel, let contentView, let iconLabel, let textLabel else { return }
 
-        if previousState == .recording && state != .recording {
+        if (previousState == .recording || previousState == .preparing) && state != previousState {
             stopWaveformAnimation()
         }
 
@@ -333,7 +340,7 @@ final class FloatingIndicatorController: NSObject {
         switch state {
         case .recording:
             setupWaveformBars(in: targetFrame.size)
-            startWaveformAnimation()
+            startWaveformAnimation(mode: .level)
             addStopLayer(in: targetFrame.size)
         case .transcribing:
             if #available(macOS 15, *) {
@@ -343,13 +350,8 @@ final class FloatingIndicatorController: NSObject {
                 )
             }
         case .preparing:
-            if #available(macOS 15, *) {
-                micIconView?.addSymbolEffect(
-                    .pulse,
-                    options: .repeating,
-                    animated: true
-                )
-            }
+            setupWaveformBars(in: targetFrame.size)
+            startWaveformAnimation(mode: .waiting)
         default:
             break
         }
@@ -681,6 +683,7 @@ final class FloatingIndicatorController: NSObject {
         barLayers.forEach { $0.removeFromSuperlayer() }
         barLayers.removeAll()
         smoothedAmplitude = 0
+        waveformAnimationMode = .level
         powerProvider = nil
         contentView?.layer?.transform = CATransform3DIdentity
         removeStopLayer()
@@ -709,8 +712,10 @@ final class FloatingIndicatorController: NSObject {
         }
     }
 
-    private func startWaveformAnimation() {
+    private func startWaveformAnimation(mode: WaveformAnimationMode) {
         amplitudeTimer?.invalidate()
+        waveformAnimationMode = mode
+        waveformAnimationStartedAt = Date()
         amplitudeTimer = Timer.scheduledTimer(
             timeInterval: 1.0 / 30.0,
             target: self,
@@ -725,16 +730,33 @@ final class FloatingIndicatorController: NSObject {
         let multipliers: [CGFloat] = [0.6, 0.85, 1.0, 0.85, 0.6]
         let minHeight: CGFloat = 3
         let maxHeight: CGFloat = 14
-        let dB = CGFloat(powerProvider?() ?? -160)
-        let raw = max(0, min(1, (dB + 50) / 50))
-        smoothedAmplitude = 0.35 * raw + 0.65 * smoothedAmplitude
         let pillHeight = contentView.frame.height
+        let elapsed = CGFloat(Date().timeIntervalSince(waveformAnimationStartedAt))
+        let levelAmplitude: CGFloat
+        if waveformAnimationMode == .level {
+            let dB = CGFloat(powerProvider?() ?? -160)
+            let raw = max(0, min(1, (dB + 50) / 50))
+            smoothedAmplitude = 0.35 * raw + 0.65 * smoothedAmplitude
+            levelAmplitude = smoothedAmplitude
+        } else {
+            levelAmplitude = 0
+        }
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for (i, bar) in barLayers.enumerated() {
             let m = i < multipliers.count ? multipliers[i] : 1.0
-            let h = minHeight + (maxHeight - minHeight) * smoothedAmplitude * m
+            let amplitude: CGFloat
+            switch waveformAnimationMode {
+            case .level:
+                amplitude = levelAmplitude * m
+                bar.opacity = 0.85
+            case .waiting:
+                let phase = elapsed * 5.8 + CGFloat(i) * 0.72
+                amplitude = 0.28 + (sin(phase) + 1) * 0.22 * m
+                bar.opacity = Float(0.38 + (sin(phase) + 1) * 0.18)
+            }
+            let h = minHeight + (maxHeight - minHeight) * amplitude
             bar.frame.size.height = h
             bar.frame.origin.y = (pillHeight - h) / 2
         }
@@ -833,16 +855,7 @@ final class FloatingIndicatorController: NSObject {
         case .preparing:
             wandIconView?.isHidden = true
             iconLabel?.isHidden = true
-            micIconView?.isHidden = false
-            if let mic = micIconView {
-                mic.alphaValue = 0.86
-                mic.frame = NSRect(
-                    x: (frameSize.width - iconSize.width) / 2,
-                    y: (frameSize.height - iconSize.height) / 2,
-                    width: iconSize.width,
-                    height: iconSize.height
-                )
-            }
+            micIconView?.isHidden = true
         }
     }
 
