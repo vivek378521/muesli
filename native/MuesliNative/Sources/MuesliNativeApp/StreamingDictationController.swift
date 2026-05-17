@@ -10,7 +10,7 @@ import os
 ///   controller.onPartialText = { fullText in /* paste delta */ }
 ///   controller.start()
 ///   // ... user speaks ...
-///   let finalText = controller.stop()
+///   controller.stop { finalText in /* persist final text */ }
 @available(macOS 15, *)
 final class StreamingDictationController {
     /// Called with the full accumulated transcript so far (on a background thread).
@@ -29,6 +29,7 @@ final class StreamingDictationController {
     private var isActive = false
     private var activeSessionID: UUID?
     private let chunkSamples = 8960  // 560ms at 16kHz
+    private static let stopDrainTimeout: TimeInterval = 1.0
 
     init(
         transcriber: NemotronStreamingTranscriber,
@@ -111,12 +112,13 @@ final class StreamingDictationController {
         return true
     }
 
-    /// Stop recording and return text already emitted by real-time chunk drains.
-    /// This intentionally avoids blocking the main thread on trailing chunks.
-    func stop() -> String {
-        guard isActive else { return fullTranscript }
+    /// Stop recording and finish queued audio off the caller's thread.
+    func stop(completion: @escaping (String) -> Void) {
+        guard let sessionID = activeSessionID else {
+            completion(fullTranscript)
+            return
+        }
         isActive = false
-        activeSessionID = nil
 
         let _ = recorder.stop()
 
@@ -127,18 +129,39 @@ final class StreamingDictationController {
             return samples
         }
 
+        if !remaining.isEmpty {
+            var padded = remaining
+            if padded.count < chunkSamples {
+                padded.append(contentsOf: [Float](repeating: 0, count: chunkSamples - padded.count))
+            }
+            let finalChunk = padded
+            queueLock.withLock {
+                chunkQueue.append(finalChunk)
+            }
+        }
+
+        startDrainIfNeeded(sessionID: sessionID)
+        Task {
+            await self.waitForDrain(sessionID: sessionID, timeout: Self.stopDrainTimeout)
+            let transcript = self.finishStoppedSession(sessionID: sessionID)
+            completion(transcript)
+        }
+    }
+
+    func cancel() {
+        isActive = false
+        activeSessionID = nil
+        recorder.cancel()
+        bufferLock.withLock {
+            sampleBuffer.removeAll()
+        }
         queueLock.withLock {
             chunkQueue.removeAll()
         }
         drainLock.withLock {
             isDraining = false
         }
-        if !remaining.isEmpty {
-            fputs("[streaming-dictation] discarded trailing samples on stop: \(remaining.count)\n", stderr)
-        }
-
-        fputs("[streaming-dictation] stopped, transcript (\(fullTranscript.count) chars): \(fullTranscript.prefix(100))...\n", stderr)
-        return fullTranscript
+        streamState = nil
     }
 
     // MARK: - Audio Buffer Handling
@@ -192,7 +215,34 @@ final class StreamingDictationController {
     }
 
     private func isCurrentSession(_ sessionID: UUID) -> Bool {
-        isActive && activeSessionID == sessionID
+        activeSessionID == sessionID
+    }
+
+    private func waitForDrain(sessionID: UUID, timeout: TimeInterval) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            guard isCurrentSession(sessionID) else { return }
+            let queueIsEmpty = queueLock.withLock { chunkQueue.isEmpty }
+            let currentlyDraining = drainLock.withLock { isDraining }
+            if queueIsEmpty && !currentlyDraining { return }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        fputs("[streaming-dictation] stop drain timed out\n", stderr)
+    }
+
+    private func finishStoppedSession(sessionID: UUID) -> String {
+        guard isCurrentSession(sessionID) else { return fullTranscript }
+        activeSessionID = nil
+        queueLock.withLock {
+            chunkQueue.removeAll()
+        }
+        drainLock.withLock {
+            isDraining = false
+        }
+        streamState = nil
+        let transcript = fullTranscript
+        fputs("[streaming-dictation] stopped, transcript (\(transcript.count) chars): \(transcript.prefix(100))...\n", stderr)
+        return transcript
     }
 
     /// Process all queued chunks serially, one at a time.

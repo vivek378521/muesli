@@ -463,7 +463,7 @@ enum AudioInputDeviceSelection {
         to engine: AVAudioEngine,
         logPrefix: String
     ) {
-        guard var deviceID = preferredInputDeviceID ?? CoreAudioDeviceInspector().defaultInputDeviceID() else {
+        guard var deviceID = preferredInputDeviceID else {
             return
         }
         guard let audioUnit = engine.inputNode.audioUnit else {

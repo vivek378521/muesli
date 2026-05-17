@@ -68,10 +68,10 @@ struct StreamingDictationControllerTests {
 
     @available(macOS 15, *)
     @Test("stop returns empty string when not started")
-    func stopWithoutStart() {
+    func stopWithoutStart() async {
         let transcriber = NemotronStreamingTranscriber()
         let controller = StreamingDictationController(transcriber: transcriber)
-        let result = controller.stop()
+        let result = await stop(controller)
         #expect(result.isEmpty)
     }
 
@@ -228,11 +228,11 @@ struct StreamingDictationControllerLifecycleTests {
 
     @available(macOS 15, *)
     @Test("double stop is safe")
-    func doubleStop() {
+    func doubleStop() async {
         let transcriber = NemotronStreamingTranscriber()
         let controller = StreamingDictationController(transcriber: transcriber)
-        let result1 = controller.stop()
-        let result2 = controller.stop()
+        let result1 = await stop(controller)
+        let result2 = await stop(controller)
         #expect(result1.isEmpty)
         #expect(result2.isEmpty)
     }
@@ -244,6 +244,15 @@ struct StreamingDictationControllerLifecycleTests {
         let controller = StreamingDictationController(transcriber: transcriber)
         // warmup should handle errors gracefully
         controller.warmup()
+    }
+}
+
+@available(macOS 15, *)
+private func stop(_ controller: StreamingDictationController) async -> String {
+    await withCheckedContinuation { continuation in
+        controller.stop { text in
+            continuation.resume(returning: text)
+        }
     }
 }
 
