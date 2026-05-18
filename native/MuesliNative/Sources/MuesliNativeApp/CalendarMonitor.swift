@@ -49,6 +49,7 @@ final class CalendarMonitor {
     }
 
     private func registerForChanges() {
+        guard changeObserver == nil else { return }
         // EKEventStoreChangedNotification fires whenever any calendar event
         // is added, modified, or deleted — including synced changes from
         // Google Calendar, iCloud, Exchange, etc. This is push-based and

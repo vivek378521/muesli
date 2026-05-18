@@ -470,9 +470,10 @@ final class MuesliController: NSObject {
             }
         }
 
-        // Calendar monitor runs unconditionally so the "Coming Up" section
-        // is always populated, even when meeting detection is turned off.
-        if canRunMainApp {
+        // Calendar monitor populates the "Coming Up" section even when
+        // meeting detection is turned off, but only for meeting use cases
+        // to avoid prompting dictation-only users for Calendar access.
+        if canRunMainApp && config.resolvedOnboardingUseCase.includesMeetings {
             calendarMonitor.start()
             startCalendarMonitoring()
         }
@@ -1755,8 +1756,10 @@ final class MuesliController: NSObject {
                 hotkeyMonitor.start()
                 startComputerUseHotkeyMonitorIfNeeded()
             }
-            calendarMonitor.start()
-            startCalendarMonitoring()
+            if onboardingUseCase.includesMeetings {
+                calendarMonitor.start()
+                startCalendarMonitoring()
+            }
             // Start monitors that were deferred during onboarding
             if shouldRunMeetingFeatureMonitors {
                 startMeetingFeatureMonitors(includeMaraudersMap: false)

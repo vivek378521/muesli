@@ -259,14 +259,14 @@ private struct ThresholdPicker: View {
                 } label: {
                     HStack {
                         Text(Self.label(for: step))
-                        if abs(value - step) < 0.001 {
+                        if abs(Self.snap(value) - step) < 0.001 {
                             Image(systemName: "checkmark")
                         }
                     }
                 }
             }
         } label: {
-            Text(Self.label(for: value))
+            Text(Self.label(for: Self.snap(value)))
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .foregroundStyle(MuesliTheme.textSecondary)
                 .padding(.horizontal, 8)
@@ -283,6 +283,11 @@ private struct ThresholdPicker: View {
     }
 
     private static func label(for value: Double) -> String {
-        "\(Int(value * 100))%"
+        "\(Int(round(value * 100)))%"
+    }
+
+    private static func snap(_ value: Double) -> Double {
+        let nearest = (value * 20).rounded() / 20 // round to nearest 0.05
+        return min(max(nearest, steps.first!), steps.last!)
     }
 }
