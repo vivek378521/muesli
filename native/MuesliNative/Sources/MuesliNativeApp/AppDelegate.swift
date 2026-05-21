@@ -11,7 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let sparkleUpdateDelegate = SparkleUpdateDelegate()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        Self.installStandardEditMenu()
+        installStandardEditMenu()
 
         let telemetryConfig = TelemetryDeck.Config(appID: "7F2B7846-1CB5-4FE6-8ABC-56F217B06A86")
         TelemetryDeck.initialize(config: telemetryConfig)
@@ -67,7 +67,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller?.openSettingsTab()
     }
 
-    private static func installStandardEditMenu() {
+    @objc func focusSearch(_ sender: Any?) {
+        controller?.focusSearchField()
+    }
+
+    private func installStandardEditMenu() {
         let mainMenu = NSMenu()
 
         let appMenuItem = NSMenuItem()
@@ -77,6 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             action: #selector(AppDelegate.openPreferences(_:)),
             keyEquivalent: ","
         )
+        settingsItem.target = self
         appMenu.addItem(settingsItem)
         appMenu.addItem(.separator())
         appMenu.addItem(
@@ -102,9 +107,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(withTitle: "Delete", action: #selector(NSText.delete(_:)), keyEquivalent: "")
         editMenu.addItem(.separator())
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenu.addItem(.separator())
+        let findItem = NSMenuItem(
+            title: "Find",
+            action: #selector(AppDelegate.focusSearch(_:)),
+            keyEquivalent: "f"
+        )
+        findItem.target = self
+        editMenu.addItem(findItem)
 
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
+
+        let windowMenuItem = NSMenuItem()
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(
+            withTitle: "Close Window",
+            action: #selector(NSWindow.performClose(_:)),
+            keyEquivalent: "w"
+        )
+        windowMenuItem.submenu = windowMenu
+        mainMenu.addItem(windowMenuItem)
+        NSApp.windowsMenu = windowMenu
+
         NSApp.mainMenu = mainMenu
     }
 }
