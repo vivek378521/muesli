@@ -132,10 +132,6 @@ echo "[1/11] Running tests..."
 mkdir -p "$SWIFTPM_SCRATCH_PATH"
 echo "  SwiftPM scratch path: $SWIFTPM_SCRATCH_PATH"
 swift test --package-path "$PACKAGE_DIR" --scratch-path "$SWIFTPM_SCRATCH_PATH"
-if [[ ! -x "$GENERATE_APPCAST" ]]; then
-  echo "ERROR: generate_appcast not found at $GENERATE_APPCAST" >&2
-  exit 1
-fi
 echo "  Tests passed."
 
 # --- Step 2: Build and sign ---
@@ -154,6 +150,10 @@ MUESLI_INSTALL_DIR="$INSTALL_DIR" \
   MUESLI_SIGN_IDENTITY="$SIGN_IDENTITY" \
   "$ROOT/scripts/build_native_app.sh" > /dev/null
 echo "  Installed to $APP_DIR"
+if [[ ! -x "$GENERATE_APPCAST" ]]; then
+  echo "ERROR: generate_appcast not found at $GENERATE_APPCAST" >&2
+  exit 1
+fi
 
 FLAGS=$(codesign -dvvv "$APP_DIR" 2>&1 | grep -o 'flags=0x[0-9a-f]*([^)]*)')
 echo "  Signature: $FLAGS"

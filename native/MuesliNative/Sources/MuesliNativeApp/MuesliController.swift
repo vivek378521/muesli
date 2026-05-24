@@ -2717,6 +2717,9 @@ final class MuesliController: NSObject {
         }
         if !didPresent {
             isPresentingMeetingTerminationConfirmation = false
+            discardMeetingStateForTermination()
+            isTerminatingAfterMeetingConfirmation = true
+            NSApp.terminate(nil)
         }
 
         return false
@@ -3567,7 +3570,7 @@ final class MuesliController: NSObject {
                 await MainActor.run {
                     self.setMeetingProcessingStatus("Finalizing")
                 }
-                let recordingSaveDecision = await self.recordingSaveDecision(for: result.title)
+                let recordingSaveDecision = await self.recordingSaveDecision(for: result)
                 let persistenceResult = try await MainActor.run {
                     try self.persistCompletedMeetingResultAndDispatchHook(
                         result,
@@ -3754,13 +3757,15 @@ final class MuesliController: NSObject {
         saveDecision: Bool? = nil
     ) throws -> String? {
         let shouldSave: Bool
-        switch config.meetingRecordingSavePolicy {
-        case .never:
-            shouldSave = false
-        case .always:
-            shouldSave = true
-        case .prompt:
-            shouldSave = saveDecision ?? true
+        if let saveDecision {
+            shouldSave = saveDecision
+        } else {
+            switch config.meetingRecordingSavePolicy {
+            case .never:
+                shouldSave = false
+            case .always, .prompt:
+                shouldSave = true
+            }
         }
 
         guard shouldSave else {
@@ -3837,9 +3842,10 @@ final class MuesliController: NSObject {
     }
 
     @MainActor
-    private func recordingSaveDecision(for title: String) async -> Bool? {
+    private func recordingSaveDecision(for result: MeetingSessionResult) async -> Bool? {
         guard config.meetingRecordingSavePolicy == .prompt else { return nil }
-        return await promptToSaveMeetingRecording(for: title)
+        guard result.retainedRecordingURL != nil, result.retainedRecordingError == nil else { return nil }
+        return await promptToSaveMeetingRecording(for: result.title)
     }
 
     @MainActor

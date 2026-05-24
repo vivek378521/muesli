@@ -460,6 +460,87 @@ struct MeetingsNavigationTests {
         #expect(FileManager.default.fileExists(atPath: retainedRecordingURL.path) == false)
     }
 
+    @Test("persistCompletedMeetingResult honors explicit recording save decision after policy drift")
+    func persistCompletedMeetingResultHonorsExplicitRecordingSaveDecisionAfterPolicyDrift() async throws {
+        let store = try makeStore()
+        let controller = MuesliController(
+            runtime: RuntimePaths(
+                repoRoot: FileManager.default.temporaryDirectory,
+                menuIcon: nil,
+                appIcon: nil,
+                bundlePath: nil
+            ),
+            dictationStore: store
+        )
+        controller.updateConfig { $0.meetingRecordingSavePolicy = .never }
+
+        let retainedRecordingURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("retained-policy-drift-\(UUID().uuidString)")
+            .appendingPathExtension("wav")
+        try Data("recording".utf8).write(to: retainedRecordingURL)
+
+        let result = MeetingSessionResult(
+            title: "Policy Drift",
+            originalTitle: "Meeting",
+            calendarEventID: nil,
+            startTime: Date(),
+            endTime: Date().addingTimeInterval(30),
+            durationSeconds: 30,
+            rawTranscript: "Policy drift transcript.",
+            formattedNotes: "## Summary\nPolicy drift notes.",
+            retainedRecordingURL: retainedRecordingURL,
+            retainedRecordingError: nil,
+            systemRecordingURL: nil,
+            templateSnapshot: MeetingTemplates.auto.snapshot
+        )
+
+        let persistenceResult = try controller.persistCompletedMeetingResult(
+            result,
+            recordingSaveDecision: true
+        )
+
+        let storedMeeting = try #require(try store.meeting(id: persistenceResult.meetingID))
+        let savedRecordingPath = try #require(storedMeeting.savedRecordingPath)
+        #expect(FileManager.default.fileExists(atPath: savedRecordingPath))
+        #expect(FileManager.default.fileExists(atPath: retainedRecordingURL.path) == false)
+    }
+
+    @Test("persistCompletedMeetingResult surfaces prompt policy retained recording failures")
+    func persistCompletedMeetingResultSurfacesPromptPolicyRetainedRecordingFailures() async throws {
+        let store = try makeStore()
+        let controller = MuesliController(
+            runtime: RuntimePaths(
+                repoRoot: FileManager.default.temporaryDirectory,
+                menuIcon: nil,
+                appIcon: nil,
+                bundlePath: nil
+            ),
+            dictationStore: store
+        )
+        controller.updateConfig { $0.meetingRecordingSavePolicy = .prompt }
+
+        let result = MeetingSessionResult(
+            title: "Failed Retention",
+            originalTitle: "Meeting",
+            calendarEventID: nil,
+            startTime: Date(),
+            endTime: Date().addingTimeInterval(30),
+            durationSeconds: 30,
+            rawTranscript: "Retention failure transcript.",
+            formattedNotes: "## Summary\nRetention failure notes.",
+            retainedRecordingURL: nil,
+            retainedRecordingError: CocoaError(.fileWriteUnknown),
+            systemRecordingURL: nil,
+            templateSnapshot: MeetingTemplates.auto.snapshot
+        )
+
+        let persistenceResult = try controller.persistCompletedMeetingResult(result)
+
+        let storedMeeting = try #require(try store.meeting(id: persistenceResult.meetingID))
+        #expect(storedMeeting.savedRecordingPath == nil)
+        #expect(persistenceResult.recordingSaveError != nil)
+    }
+
     @Test("persistCompletedMeetingResult preserves user-edited live meeting title")
     func persistCompletedMeetingResultPreservesEditedLiveTitle() async throws {
         let store = try makeStore()
