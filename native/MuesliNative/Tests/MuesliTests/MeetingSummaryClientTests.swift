@@ -385,4 +385,158 @@ struct MeetingSummaryClientTests {
             #expect(summaryError != nil)
         }
     }
+
+    @Test("resolveCustomLLMURL expands OpenAI-compatible endpoints")
+    func resolveCustomLLMOpenAIURL() {
+        var config = AppConfig()
+
+        config.customLLMURL = ""
+        #expect(
+            MeetingSummaryClient.resolveCustomLLMURL(config: config, format: .openAI)?.absoluteString ==
+                "http://localhost:8080/v1/chat/completions"
+        )
+
+        config.customLLMURL = "https://models.example.com"
+        #expect(
+            MeetingSummaryClient.resolveCustomLLMURL(config: config, format: .openAI)?.absoluteString ==
+                "https://models.example.com/v1/chat/completions"
+        )
+
+        config.customLLMURL = "https://models.example.com/v1/"
+        #expect(
+            MeetingSummaryClient.resolveCustomLLMURL(config: config, format: .openAI)?.absoluteString ==
+                "https://models.example.com/v1/chat/completions"
+        )
+
+        config.customLLMURL = "https://models.example.com/v1/chat/completions/"
+        #expect(
+            MeetingSummaryClient.resolveCustomLLMURL(config: config, format: .openAI)?.absoluteString ==
+                "https://models.example.com/v1/chat/completions"
+        )
+    }
+
+    @Test("resolveLMStudioURL expands chat completion endpoints")
+    func resolveLMStudioURL() {
+        var config = AppConfig()
+
+        config.lmStudioURL = ""
+        #expect(
+            MeetingSummaryClient.resolveLMStudioURL(config: config)?.absoluteString ==
+                "http://localhost:1234/v1/chat/completions"
+        )
+
+        config.lmStudioURL = "http://localhost:1234/v1"
+        #expect(
+            MeetingSummaryClient.resolveLMStudioURL(config: config)?.absoluteString ==
+                "http://localhost:1234/v1/chat/completions"
+        )
+
+        config.lmStudioURL = "http://localhost:1234/v1/chat/completions"
+        #expect(
+            MeetingSummaryClient.resolveLMStudioURL(config: config)?.absoluteString ==
+                "http://localhost:1234/v1/chat/completions"
+        )
+    }
+
+    @Test("resolveCustomLLMURL expands Anthropic endpoints")
+    func resolveCustomLLMAnthropicURL() {
+        var config = AppConfig()
+
+        config.customLLMURL = ""
+        #expect(
+            MeetingSummaryClient.resolveCustomLLMURL(config: config, format: .anthropic)?.absoluteString ==
+                "https://api.anthropic.com/v1/messages"
+        )
+
+        config.customLLMURL = "https://models.example.com/anthropic"
+        #expect(
+            MeetingSummaryClient.resolveCustomLLMURL(config: config, format: .anthropic)?.absoluteString ==
+                "https://models.example.com/anthropic/v1/messages"
+        )
+
+        config.customLLMURL = "https://models.example.com/v1/messages/"
+        #expect(
+            MeetingSummaryClient.resolveCustomLLMURL(config: config, format: .anthropic)?.absoluteString ==
+                "https://models.example.com/v1/messages"
+        )
+    }
+
+    @Test("extractAnthropicText joins text blocks")
+    func extractAnthropicText() {
+        let payload: [String: Any] = [
+            "content": [
+                ["type": "text", "text": "First"],
+                ["type": "text", "text": "Second"],
+            ],
+        ]
+
+        #expect(MeetingSummaryClient.extractAnthropicText(from: payload) == "First\nSecond")
+        #expect(MeetingSummaryClient.extractAnthropicText(from: [:]) == nil)
+    }
+
+    @Test("summarize routes to LM Studio when configured")
+    func routesToLMStudio() async throws {
+        var config = AppConfig()
+        config.meetingSummaryBackend = "lmstudio"
+        config.lmStudioURL = "http://localhost:1"
+        config.lmStudioModel = "local-model"
+
+        do {
+            _ = try await MeetingSummaryClient.summarize(
+                transcript: "Test transcript",
+                meetingTitle: "My Meeting",
+                config: config
+            )
+            #expect(Bool(false), "Expected error to be thrown")
+        } catch {
+            let summaryError = error as? MeetingSummaryError
+            #expect(summaryError != nil)
+            if case .requestFailed(let backend, _) = summaryError! {
+                #expect(backend == "LM Studio")
+            } else {
+                #expect(Bool(false), "Expected requestFailed error, got \(String(describing: error))")
+            }
+        }
+    }
+
+    @Test("summarize routes to custom LLM without requiring an API key")
+    func routesToCustomLLMWithoutKey() async throws {
+        var config = AppConfig()
+        config.meetingSummaryBackend = "custom_llm"
+        config.customLLMFormat = "openai"
+        config.customLLMURL = "http://localhost:1"
+        config.customLLMAPIKey = ""
+
+        do {
+            _ = try await MeetingSummaryClient.summarize(
+                transcript: "Test transcript",
+                meetingTitle: "My Custom Meeting",
+                config: config
+            )
+            #expect(Bool(false), "Expected error to be thrown")
+        } catch {
+            let summaryError = error as? MeetingSummaryError
+            #expect(summaryError != nil)
+            if case .requestFailed(let backend, _) = summaryError! {
+                #expect(backend == "Custom LLM")
+            } else {
+                #expect(Bool(false), "Expected requestFailed error, got \(String(describing: error))")
+            }
+        }
+    }
+
+    @Test("generateTitle returns nil for LM Studio when unreachable")
+    func titleLMStudioUnreachable() async {
+        var config = AppConfig()
+        config.meetingSummaryBackend = "lmstudio"
+        config.lmStudioURL = "http://localhost:1"
+        config.lmStudioModel = "local-model"
+
+        let title = await MeetingSummaryClient.generateTitle(
+            transcript: "Sprint planning discussion",
+            config: config
+        )
+
+        #expect(title == nil)
+    }
 }
