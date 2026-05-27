@@ -401,16 +401,23 @@ final class MeetingNeuralAec {
         let oldestNeededForEstimator = latestComparableSystemSample > 0
             ? max(0, latestComparableSystemSample - delayEstimator.windowSamples)
             : max(0, systemSamplesReceived - retentionSamples)
-        let oldestNeededForAec = max(0, pendingMicStartSample - maxCandidateDelaySamples - frameSize)
+        // AEC constraint: only protect system samples that queued mic frames actually need.
+        // When the pending buffer is empty there is nothing to protect, so trim freely.
+        let oldestNeededForAec = pendingMicSamples.isEmpty
+            ? systemSamplesReceived
+            : max(0, pendingMicStartSample - maxCandidateDelaySamples - frameSize)
         let micRetentionFloor = max(0, micSamplesReceived - retentionSamples)
         let systemRetentionFloor = max(0, systemSamplesReceived - retentionSamples)
         // micHistory is only used by the delay estimator. retentionSamples is sized to hold
         // exactly what the estimator needs, so always cap to it. When system audio is lagging,
         // the estimator cannot use old mic samples anyway.
         trimMicHistory(before: micRetentionFloor)
-        // systemHistory is used by both estimator and AEC. Respect both needs, but enforce
-        // the retention floor so the buffer doesn't grow unboundedly.
-        trimSystemHistory(before: max(systemRetentionFloor, min(oldestNeededForEstimator, oldestNeededForAec)))
+        // systemHistory is used by both estimator and AEC. systemRetentionFloor already
+        // covers the estimator's window (retentionSamples = windowSamples + maxCandidateDelaySamples).
+        // Cap at oldestNeededForAec so we never trim frames that queued mic frames still need
+        // for echo cancellation — this prevents returning zero/partial references when system
+        // audio gets ahead of mic audio during a long mic pause.
+        trimSystemHistory(before: min(systemRetentionFloor, oldestNeededForAec))
     }
 
     private func delayDecision(for result: MeetingAecDelayEstimator.Result) -> (shouldApply: Bool, reason: String) {

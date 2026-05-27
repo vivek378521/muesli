@@ -62,6 +62,12 @@ enum MeetingChatClient {
         if backend == MeetingSummaryBackendOption.ollama.backend {
             return try await sendWithOllama(messages: messages, config: config)
         }
+        if backend == MeetingSummaryBackendOption.lmStudio.backend {
+            return try await sendWithLMStudio(messages: messages, config: config)
+        }
+        if backend == MeetingSummaryBackendOption.customLLM.backend {
+            return try await sendWithCustomLLM(messages: messages, config: config)
+        }
         return try await sendWithOpenAI(messages: messages, config: config)
     }
 
@@ -284,6 +290,162 @@ enum MeetingChatClient {
         }
     }
 
+    private static func sendWithLMStudio(messages: [MeetingChatMessage], config: AppConfig) async throws -> String {
+        guard let requestURL = MeetingSummaryClient.resolveLMStudioURL(config: config) else {
+            throw MeetingChatError.backendFailed(backend: "LM Studio", statusCode: nil, message: "Invalid LM Studio URL: \(config.lmStudioURL)")
+        }
+        let model = config.lmStudioModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !model.isEmpty else {
+            throw MeetingChatError.backendFailed(
+                backend: "LM Studio",
+                statusCode: nil,
+                message: "No model selected. Select an LM Studio model in Settings."
+            )
+        }
+        return try await sendWithChatCompletions(
+            backend: "LM Studio",
+            requestURL: requestURL,
+            apiKey: "",
+            model: model,
+            messages: messages
+        )
+    }
+
+    private static func sendWithCustomLLM(messages: [MeetingChatMessage], config: AppConfig) async throws -> String {
+        let format = CustomLLMFormat(rawValue: config.customLLMFormat) ?? .openAI
+        guard let requestURL = MeetingSummaryClient.resolveCustomLLMURL(config: config, format: format) else {
+            throw MeetingChatError.backendFailed(backend: "Custom LLM", statusCode: nil, message: "Invalid custom URL: \(config.customLLMURL)")
+        }
+        let model = config.customLLMModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !model.isEmpty else {
+            throw MeetingChatError.backendFailed(
+                backend: "Custom LLM",
+                statusCode: nil,
+                message: "No model selected. Enter a model in Settings."
+            )
+        }
+        let apiKey = config.customLLMAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if MeetingSummaryClient.customLLMRequiresAPIKey(config: config) && apiKey.isEmpty {
+            throw MeetingChatError.backendFailed(
+                backend: "Custom LLM",
+                statusCode: nil,
+                message: "Enter an API key for the selected Custom LLM format."
+            )
+        }
+        switch format {
+        case .openAI:
+            return try await sendWithChatCompletions(
+                backend: "Custom LLM",
+                requestURL: requestURL,
+                apiKey: apiKey,
+                model: model,
+                messages: messages
+            )
+        case .anthropic:
+            return try await sendWithAnthropicMessages(
+                backend: "Custom LLM",
+                requestURL: requestURL,
+                apiKey: apiKey,
+                model: model,
+                messages: messages
+            )
+        }
+    }
+
+    /// Send messages using an OpenAI-compatible chat completions endpoint.
+    private static func sendWithChatCompletions(
+        backend: String,
+        requestURL: URL,
+        apiKey: String,
+        model: String,
+        messages: [MeetingChatMessage]
+    ) async throws -> String {
+        let trimmed = trimmedMessages(messages)
+        let chatMessages: [[String: Any]] = trimmed.map { ["role": $0.role.rawValue, "content": $0.content] }
+        let body: [String: Any] = [
+            "model": model,
+            "messages": chatMessages,
+        ]
+
+        var request = URLRequest(url: requestURL)
+        request.timeoutInterval = chatTimeout
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if !apiKey.isEmpty {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            try validateHTTPResponse(response, data: data, backend: backend)
+            guard
+                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let text = extractOpenRouterText(from: json),
+                !text.isEmpty
+            else {
+                if let msg = extractErrorMessage(from: data) {
+                    throw MeetingChatError.backendFailed(backend: backend, statusCode: nil, message: msg)
+                }
+                throw MeetingChatError.emptyResponse(backend: backend)
+            }
+            return text
+        } catch {
+            throw chatRequestError(backend: backend, error: error)
+        }
+    }
+
+    /// Send messages using the Anthropic Messages API format.
+    private static func sendWithAnthropicMessages(
+        backend: String,
+        requestURL: URL,
+        apiKey: String,
+        model: String,
+        messages: [MeetingChatMessage]
+    ) async throws -> String {
+        let trimmed = trimmedMessages(messages)
+        let systemContent = trimmed.first(where: { $0.role == .system })?.content ?? ""
+        let nonSystemMessages: [[String: Any]] = trimmed
+            .filter { $0.role != .system }
+            .map { ["role": $0.role.rawValue, "content": $0.content] }
+
+        var body: [String: Any] = [
+            "model": model,
+            "messages": nonSystemMessages,
+        ]
+        if !systemContent.isEmpty {
+            body["system"] = systemContent
+        }
+
+        var request = URLRequest(url: requestURL)
+        request.timeoutInterval = chatTimeout
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        if !apiKey.isEmpty {
+            request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            try validateHTTPResponse(response, data: data, backend: backend)
+            guard
+                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let text = extractAnthropicText(from: json),
+                !text.isEmpty
+            else {
+                if let msg = extractErrorMessage(from: data) {
+                    throw MeetingChatError.backendFailed(backend: backend, statusCode: nil, message: msg)
+                }
+                throw MeetingChatError.emptyResponse(backend: backend)
+            }
+            return text
+        } catch {
+            throw chatRequestError(backend: backend, error: error)
+        }
+    }
+
     // MARK: - Helpers
 
     private static func validateHTTPResponse(_ response: URLResponse, data: Data, backend: String) throws {
@@ -331,5 +493,17 @@ enum MeetingChatClient {
             return content.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return nil
+    }
+
+    private static func extractAnthropicText(from payload: [String: Any]) -> String? {
+        guard let content = payload["content"] as? [[String: Any]] else { return nil }
+        let parts = content.compactMap { entry -> String? in
+            guard (entry["type"] as? String) == "text",
+                  let text = entry["text"] as? String,
+                  !text.isEmpty else { return nil }
+            return text
+        }
+        guard !parts.isEmpty else { return nil }
+        return parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
