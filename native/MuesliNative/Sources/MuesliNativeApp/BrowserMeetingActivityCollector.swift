@@ -174,8 +174,10 @@ final class BrowserMeetingActivityCollector {
         let axApp = AXUIElementCreateApplication(app.processIdentifier)
         var observedFocusedNonMeetingDocumentURL = false
         var observedBackgroundNonMeetingDocumentURL = false
+        var probedWindowIDs = Set<CFHashCode>()
 
         if let window = axWindowAttribute(kAXFocusedWindowAttribute, from: axApp) {
+            probedWindowIDs.insert(CFHash(window))
             switch documentURLProbe(from: window, isFocused: true) {
             case .meeting(let normalized, let isFocused):
                 return .meeting(normalized, isFocused: isFocused)
@@ -186,13 +188,15 @@ final class BrowserMeetingActivityCollector {
             }
         }
         if let window = axWindowAttribute(kAXMainWindowAttribute, from: axApp) {
-            switch documentURLProbe(from: window, isFocused: false) {
-            case .meeting(let normalized, let isFocused):
-                return .meeting(normalized, isFocused: isFocused)
-            case .nonMeetingDocument:
-                observedBackgroundNonMeetingDocumentURL = true
-            case .noDocumentURL:
-                break
+            if probedWindowIDs.insert(CFHash(window)).inserted {
+                switch documentURLProbe(from: window, isFocused: false) {
+                case .meeting(let normalized, let isFocused):
+                    return .meeting(normalized, isFocused: isFocused)
+                case .nonMeetingDocument:
+                    observedBackgroundNonMeetingDocumentURL = true
+                case .noDocumentURL:
+                    break
+                }
             }
         }
 
@@ -206,6 +210,9 @@ final class BrowserMeetingActivityCollector {
         }
 
         for window in windows {
+            guard probedWindowIDs.insert(CFHash(window)).inserted else {
+                continue
+            }
             switch documentURLProbe(from: window, isFocused: false) {
             case .meeting(let normalized, let isFocused):
                 return .meeting(normalized, isFocused: isFocused)
@@ -309,19 +316,20 @@ final class BrowserMeetingActivityCollector {
         return activeTab.value(forKey: "URL") as? String
     }
 
+    // Keep aligned with MeetingCandidateResolver.browserApps in
+    // native/MuesliNative/Sources/MuesliNativeApp/MeetingCandidateResolver.swift.
+    // This remains an explicit allowlist because these bundle IDs are known to
+    // expose window and active-tab URL fields through ScriptingBridge.
+    static let scriptingBridgeActiveTabBrowserBundleIDs: Set<String> = [
+        "com.apple.Safari",
+        "com.google.Chrome",
+        "com.brave.Browser",
+        "company.thebrowser.Browser",
+        "com.microsoft.edgemac",
+    ]
+
     private static func browserSupportsScriptingBridgeActiveTab(_ bundleID: String) -> Bool {
-        // Keep aligned with MeetingCandidateResolver.browserApps for browsers
-        // whose scripting dictionaries expose window and active-tab URL fields.
-        switch bundleID {
-        case "com.apple.Safari",
-             "com.google.Chrome",
-             "com.brave.Browser",
-             "company.thebrowser.Browser",
-             "com.microsoft.edgemac":
-            return true
-        default:
-            return false
-        }
+        scriptingBridgeActiveTabBrowserBundleIDs.contains(bundleID)
     }
 }
 

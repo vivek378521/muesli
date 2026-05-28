@@ -6,6 +6,14 @@ import Testing
 struct BrowserMeetingActivityCollectorTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    @Test("ScriptingBridge browser allowlist stays aligned with meeting browser resolver")
+    func scriptingBridgeBrowserAllowlistStaysAlignedWithMeetingBrowserResolver() {
+        #expect(
+            BrowserMeetingActivityCollector.scriptingBridgeActiveTabBrowserBundleIDs
+                == Set(MeetingCandidateResolver.browserApps.keys)
+        )
+    }
+
     private func chrome(isActive: Bool) -> RunningAppSnapshot {
         RunningAppSnapshot(
             bundleID: "com.google.Chrome",
