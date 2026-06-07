@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/muesli_spm_cache.sh"
 PACKAGE_DIR="$ROOT/native/MuesliNative"
 DIST_DIR="$ROOT/dist-native"
 INSTALL_DIR="${MUESLI_INSTALL_DIR:-/Applications}"
@@ -18,7 +19,7 @@ DEFAULT_APP_VERSION="0.6.9"
 APP_VERSION="${MUESLI_BUILD_VERSION:-$DEFAULT_APP_VERSION}"
 APP_BUNDLE_VERSION="${MUESLI_BUNDLE_VERSION:-$APP_VERSION}"
 APP_SHORT_VERSION="${MUESLI_SHORT_VERSION:-$APP_VERSION}"
-SPARKLE_FEED_URL="${MUESLI_SPARKLE_FEED_URL-https://pHequals7.github.io/muesli/appcast.xml}"
+SPARKLE_FEED_URL="${MUESLI_SPARKLE_FEED_URL-https://muesli-hq.github.io/muesli/appcast.xml}"
 SPARKLE_EDKEY="${MUESLI_SPARKLE_EDKEY-ok9CQBJ3f0MJ2GXuGBubc6VyeWyb5exmqP2b9DceqH4=}"
 STAGED_APP_DIR="$DIST_DIR/$APP_BUNDLE_NAME"
 APP_DIR="$INSTALL_DIR/$APP_BUNDLE_NAME"
@@ -31,10 +32,15 @@ if [[ "$CODESIGN_TIMESTAMP" == "none" ]]; then
 fi
 
 SWIFT_BUILD_ARGS=(--package-path "$PACKAGE_DIR" -c "$BUILD_CONFIG")
-if [[ -n "${MUESLI_SWIFTPM_SCRATCH_PATH:-}" ]]; then
-  mkdir -p "$MUESLI_SWIFTPM_SCRATCH_PATH"
-  SWIFT_BUILD_ARGS+=(--scratch-path "$MUESLI_SWIFTPM_SCRATCH_PATH")
-  echo "Using SwiftPM scratch path: $MUESLI_SWIFTPM_SCRATCH_PATH"
+if ! muesli_spm_scratch_disabled; then
+  DEFAULT_SCRATCH_CHANNEL="release"
+  if [[ "$BUILD_CONFIG" == "debug" ]]; then
+    DEFAULT_SCRATCH_CHANNEL="$(muesli_worktree_spm_scratch_channel dev "$ROOT")"
+  fi
+  SWIFTPM_SCRATCH_PATH="$(muesli_resolve_spm_scratch_path "$DEFAULT_SCRATCH_CHANNEL")"
+  mkdir -p "$SWIFTPM_SCRATCH_PATH"
+  SWIFT_BUILD_ARGS+=(--scratch-path "$SWIFTPM_SCRATCH_PATH")
+  echo "Using SwiftPM scratch path: $SWIFTPM_SCRATCH_PATH"
 fi
 
 mkdir -p "$DIST_DIR"
