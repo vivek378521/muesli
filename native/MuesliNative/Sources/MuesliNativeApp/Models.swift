@@ -776,6 +776,11 @@ struct AppConfig: Codable {
     var activePostProcessorId: String = PostProcessorOption.defaultOption.id
     var postProcessorSystemPrompt: String = PostProcessorOption.defaultSystemPrompt
     var enableScreenContext: Bool = false
+    /// Opt-in: watch the clipboard after a dictation paste to learn corrections
+    /// the user makes externally. Default OFF — repeatedly reading the clipboard
+    /// surfaces a macOS "used the clipboard" notice and polling is unreliable
+    /// under App Nap in this LSUIElement app.
+    var enableClipboardCorrectionTracking: Bool = false
     var useCoreAudioTap: Bool = true
     var meetingHookEnabled: Bool = false
     var meetingHookPath: String = ""
@@ -854,6 +859,7 @@ struct AppConfig: Codable {
         case activePostProcessorId = "active_post_processor_id"
         case postProcessorSystemPrompt = "post_processor_system_prompt"
         case enableScreenContext = "enable_screen_context"
+        case enableClipboardCorrectionTracking = "enable_clipboard_correction_tracking"
         case useCoreAudioTap = "use_core_audio_tap"
         case meetingHookEnabled = "meeting_hook_enabled"
         case meetingHookPath = "meeting_hook_path"
@@ -964,6 +970,7 @@ struct AppConfig: Codable {
         activePostProcessorId = (try? c.decode(String.self, forKey: .activePostProcessorId)) ?? defaults.activePostProcessorId
         postProcessorSystemPrompt = (try? c.decode(String.self, forKey: .postProcessorSystemPrompt)) ?? defaults.postProcessorSystemPrompt
         enableScreenContext = (try? c.decode(Bool.self, forKey: .enableScreenContext)) ?? defaults.enableScreenContext
+        enableClipboardCorrectionTracking = (try? c.decode(Bool.self, forKey: .enableClipboardCorrectionTracking)) ?? defaults.enableClipboardCorrectionTracking
         useCoreAudioTap = (try? c.decode(Bool.self, forKey: .useCoreAudioTap)) ?? defaults.useCoreAudioTap
         meetingHookEnabled = (try? c.decode(Bool.self, forKey: .meetingHookEnabled)) ?? defaults.meetingHookEnabled
         meetingHookPath = (try? c.decode(String.self, forKey: .meetingHookPath)) ?? defaults.meetingHookPath

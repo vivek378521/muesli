@@ -185,6 +185,7 @@ final class MuesliController: NSObject {
     private let dictationStore: DictationStore
     private var suggestionAnalysisLaunchTask: Task<Void, Never>?
     private var suggestionAnalysisDebounceTask: Task<Void, Never>?
+    private let clipboardCorrectionWatcher = ClipboardCorrectionWatcher()
     private let meetingHookDispatcher: MeetingHookDispatching
     private let launchAtLoginCoordinator: LaunchAtLoginCoordinator
     let transcriptionCoordinator = TranscriptionCoordinator()
@@ -1666,6 +1667,18 @@ final class MuesliController: NSObject {
     func dismissSuggestion(_ suggestion: SuggestedWordRecord) {
         try? dictationStore.setSuggestedWordStatus(id: suggestion.id, status: .dismissed)
         loadSuggestedWords()
+    }
+
+    /// Opt-in: after pasting, watch for an edited version of the text returning to
+    /// the clipboard and persist any word-level corrections as suggestions.
+    private func watchClipboardForCorrections(pastedText: String) {
+        guard config.enableClipboardCorrectionTracking else { return }
+        let store = dictationStore
+        clipboardCorrectionWatcher.watch(pastedText: pastedText) { [weak self] corrections in
+            guard !corrections.isEmpty else { return }
+            try? store.upsertSuggestedWords(corrections)
+            self?.loadSuggestedWords()
+        }
     }
 
     @discardableResult
@@ -5774,6 +5787,7 @@ final class MuesliController: NSObject {
                     self.scheduleSuggestionAnalysis()
                     if outputMode != .voiceNote {
                         PasteController.paste(text: text)
+                        self.watchClipboardForCorrections(pastedText: text)
                     }
                     self.resetDictationOutputMode()
                     self.setState(.idle)
