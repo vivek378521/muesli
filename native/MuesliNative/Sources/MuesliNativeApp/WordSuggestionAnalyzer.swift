@@ -120,9 +120,12 @@ enum WordSuggestionAnalyzer {
             // Smart canonical: prefer a confident spell-checker correction that
             // actually differs from the word; otherwise the replacement is the
             // most-frequent variant itself (a no-op rule the user can edit).
+            // Compare case-sensitively so a capitalization-only fix (e.g.
+            // "graphql" -> "GraphQL") is kept, while a truly identical string
+            // falls through to the no-op.
             let correction = suggestCorrection(canonical)
             let replacement: String?
-            if let correction, !correction.isEmpty, correction.lowercased() != canonical.lowercased() {
+            if let correction, !correction.isEmpty, correction != canonical {
                 replacement = correction
             } else {
                 replacement = canonical

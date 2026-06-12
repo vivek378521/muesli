@@ -141,6 +141,126 @@ struct WordSuggestionAnalyzerTests {
         #expect(alpha?.backends.count == 2)
     }
 
+    @Test("empty corpus yields no suggestions and no crash")
+    func emptyCorpus() {
+        #expect(analyze([]).isEmpty)
+        #expect(WordSuggestionAnalyzer.candidateTokens(dictations: [], customWords: [], dismissedOrAccepted: []).isEmpty)
+    }
+
+    @Test("blank and whitespace-only text is ignored")
+    func blankText() {
+        let result = analyze(dictations(["", "   ", "\n\t", "kubectl", "kubectl", "kubectl"]))
+        #expect(result.count == 1)
+        #expect(result.first?.word == "kubectl")
+    }
+
+    @Test("occurrences are counted case-insensitively")
+    func caseInsensitiveCounting() {
+        // KUBECTL + Kubectl + kubectl == 3 occurrences of one token.
+        let result = analyze(dictations(["KUBECTL run", "Kubectl run", "kubectl run"]))
+        let kubectl = result.first { $0.word == "kubectl" }
+        #expect(kubectl != nil)
+        #expect(kubectl?.occurrenceCount == 3)
+    }
+
+    @Test("custom word exclusion is case-insensitive")
+    func caseInsensitiveCustomExclusion() {
+        let custom = [CustomWord(word: "Kubectl", replacement: nil)]
+        let result = analyze(
+            dictations(["kubectl a", "kubectl b", "kubectl c"]),
+            customWords: custom
+        )
+        #expect(!result.contains { $0.word == "kubectl" })
+    }
+
+    @Test("spell-checker capitalization-only fix is preserved as the replacement")
+    func capitalizationOnlyCorrection() {
+        // Regression: a correction differing only in case must not be discarded.
+        let result = analyze(
+            dictations(["graphql a", "graphql b", "graphql c"]),
+            suggestCorrection: { $0 == "graphql" ? "GraphQL" : nil }
+        )
+        let suggestion = result.first { $0.word == "graphql" }
+        #expect(suggestion?.replacement == "GraphQL")
+    }
+
+    @Test("an empty-string correction falls back to the canonical")
+    func emptyCorrectionFallsBack() {
+        let result = analyze(
+            dictations(["zoiks a", "zoiks b", "zoiks c"]),
+            suggestCorrection: { _ in "" }
+        )
+        #expect(result.first { $0.word == "zoiks" }?.replacement == "zoiks")
+    }
+
+    @Test("a correction identical to the canonical falls back to the no-op rule")
+    func identicalCorrectionFallsBack() {
+        let result = analyze(
+            dictations(["zoiks a", "zoiks b", "zoiks c"]),
+            suggestCorrection: { $0 }
+        )
+        #expect(result.first { $0.word == "zoiks" }?.replacement == "zoiks")
+    }
+
+    @Test("a correctly-spelled canonical suppresses the whole cluster")
+    func correctCanonicalSuppressesCluster() {
+        // muesli (correct) is canonical with the highest count; the misspelled
+        // variant must not leak out as its own suggestion.
+        let result = analyze(
+            dictations(["muesli a", "muesli b", "muesli c", "museli d"]),
+            isSpelledCorrectly: { $0 == "muesli" }
+        )
+        #expect(result.isEmpty)
+    }
+
+    @Test("threshold is met by summing counts across a cluster")
+    func thresholdViaClusterSum() {
+        // Each variant appears twice (< 3 alone) but the cluster sums to 4.
+        let result = analyze(dictations([
+            "musli a", "musli b", "museli c", "museli d"
+        ]))
+        let suggestion = result.first { $0.word == "musli" || $0.word == "museli" }
+        #expect(suggestion != nil)
+        #expect(suggestion?.occurrenceCount == 4)
+    }
+
+    @Test("ties in count are broken alphabetically for the canonical")
+    func tieBreakAlphabetical() {
+        // "musli" and "museli" each appear 3x and cluster together; the
+        // alphabetically-first ("museli") wins the canonical.
+        let result = analyze(dictations([
+            "musli a", "musli b", "musli c",
+            "museli d", "museli e", "museli f"
+        ]))
+        let suggestion = result.first { $0.phoneticVariants.contains("musli") || $0.phoneticVariants.contains("museli") }
+        #expect(suggestion?.word == "museli")
+        #expect(suggestion?.phoneticVariants == ["musli"])
+    }
+
+    @Test("backends are de-duplicated and sorted across a cluster")
+    func backendsDedupedAndSorted() {
+        let mixed: [(text: String, backend: String?)] = [
+            ("musli x", "whisper:small"),
+            ("musli y", "whisper:small"),
+            ("museli z", "fluidaudio:parakeet"),
+        ]
+        let result = WordSuggestionAnalyzer.analyze(
+            dictations: mixed,
+            customWords: [],
+            dismissedOrAccepted: [],
+            isSpelledCorrectly: { _ in false },
+            suggestCorrection: { _ in nil }
+        )
+        let suggestion = result.first
+        #expect(suggestion?.backends == ["fluidaudio:parakeet", "whisper:small"])
+    }
+
+    @Test("nil backends do not produce phantom cross-model boosts")
+    func nilBackendsNoBoost() {
+        let result = analyze(dictations(["ztoken a", "ztoken b", "ztoken c"], backend: nil))
+        #expect(result.first?.backends.isEmpty == true)
+    }
+
     @Test("analysis does not depend on NSSpellChecker")
     func noSpellCheckerDependency() {
         // Both predicates stubbed; a result is still produced purely from inputs.

@@ -45,4 +45,51 @@ struct ClipboardCorrectionWatcherTests {
         #expect(result.first?.word == "muesli")
         #expect(result.first?.replacement == "müsli")
     }
+
+    @Test("empty inputs yield no corrections")
+    func emptyInputs() {
+        #expect(ClipboardCorrectionWatcher.corrections(from: "", to: "").isEmpty)
+        #expect(ClipboardCorrectionWatcher.corrections(from: "", to: "hello").isEmpty)
+        #expect(ClipboardCorrectionWatcher.corrections(from: "hello", to: "").isEmpty)
+    }
+
+    @Test("a capitalization-only fix is captured with the cased replacement")
+    func capitalizationFix() {
+        let result = ClipboardCorrectionWatcher.corrections(from: "ship to github today", to: "ship to GitHub today")
+        #expect(result.count == 1)
+        #expect(result.first?.word == "github")   // match side lowercased
+        #expect(result.first?.replacement == "GitHub")
+    }
+
+    @Test("multiple in-place fixes are all captured when within the change budget")
+    func multipleFixes() {
+        // 2 of 8 tokens changed -> within 30% budget; both are near-matches.
+        let result = ClipboardCorrectionWatcher.corrections(
+            from: "deploy kubernetez and run kubecti on the cluster",
+            to:   "deploy kubernetes and run kubectl on the cluster"
+        )
+        let words = Set(result.map(\.word))
+        #expect(words == ["kubernetez", "kubecti"])
+    }
+
+    @Test("too many changed tokens is treated as an unrelated copy")
+    func tooManyChanges() {
+        // 3 of 4 differ -> exceeds the change budget -> rejected wholesale.
+        let result = ClipboardCorrectionWatcher.corrections(from: "alpha beta gamma delta", to: "alpha one two three")
+        #expect(result.isEmpty)
+    }
+
+    @Test("a changed token that is purely punctuation is skipped")
+    func punctuationOnlyChangeSkipped() {
+        // "end." vs "end!" -> cores are identical after stripping, so not a diff;
+        // "go" vs "--" -> the replacement has no letter, so it's skipped.
+        let result = ClipboardCorrectionWatcher.corrections(from: "go now", to: "-- now")
+        #expect(result.isEmpty)
+    }
+
+    @Test("whitespace differences alone are not corrections")
+    func whitespaceOnly() {
+        let result = ClipboardCorrectionWatcher.corrections(from: "hello   world", to: "hello world")
+        #expect(result.isEmpty)
+    }
 }
