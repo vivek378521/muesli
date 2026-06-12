@@ -61,6 +61,10 @@ final class AppState {
     )
     var meetingStats: MeetingStats = MeetingStats(totalWords: 0, totalMeetings: 0, averageWPM: 0)
 
+    // Suggested words (mined dictionary candidates)
+    var suggestedWords: [SuggestedWordRecord] = []
+    var isAnalyzingSuggestions: Bool = false
+
     // Config-driven state
     var selectedBackend: BackendOption = .whisper
     var selectedMeetingTranscriptionBackend: BackendOption = .whisper

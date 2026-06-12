@@ -183,6 +183,8 @@ final class MuesliController: NSObject {
     private let runtime: RuntimePaths
     private let configStore = ConfigStore()
     private let dictationStore: DictationStore
+    private var suggestionAnalysisLaunchTask: Task<Void, Never>?
+    private var suggestionAnalysisDebounceTask: Task<Void, Never>?
     private let meetingHookDispatcher: MeetingHookDispatching
     private let launchAtLoginCoordinator: LaunchAtLoginCoordinator
     let transcriptionCoordinator = TranscriptionCoordinator()
@@ -582,6 +584,15 @@ final class MuesliController: NSObject {
 
         if canRunMainApp {
             PostInstallChecker.check()
+        }
+
+        // Surface any previously-mined suggestions immediately, then refresh in
+        // the background after model warmup has settled.
+        loadSuggestedWords()
+        suggestionAnalysisLaunchTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled else { return }
+            await self?.analyzeSuggestions()
         }
     }
 
@@ -1538,6 +1549,123 @@ final class MuesliController: NSObject {
 
     func removeCustomWord(id: UUID) {
         updateConfig { $0.customWords.removeAll { $0.id == id } }
+    }
+
+    // MARK: - Suggested Words
+
+    /// Load persisted pending suggestions into AppState (off-main read).
+    func loadSuggestedWords() {
+        let store = dictationStore
+        Task { [weak self] in
+            let pending = (try? store.listSuggestedWords(status: .pending)) ?? []
+            await MainActor.run { self?.appState.suggestedWords = pending }
+        }
+    }
+
+    /// Coalesce frequent triggers (e.g. after each dictation) into one analysis
+    /// run, keeping the work off the dictation latency path.
+    func scheduleSuggestionAnalysis() {
+        suggestionAnalysisDebounceTask?.cancel()
+        suggestionAnalysisDebounceTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            guard !Task.isCancelled else { return }
+            await self?.analyzeSuggestions()
+        }
+    }
+
+    /// Mine recent dictations for suggestions and persist them. The heavy
+    /// clustering runs off-main; the cheap `NSSpellChecker` pass runs on-main.
+    func analyzeSuggestions() async {
+        guard !appState.isAnalyzingSuggestions else { return }
+        appState.isAnalyzingSuggestions = true
+        defer { appState.isAnalyzingSuggestions = false }
+
+        let store = dictationStore
+        let customWords = config.customWords
+
+        // Words the user has already ruled on should never be re-suggested.
+        let resolved: Set<String> = await Task.detached {
+            let accepted = (try? store.listSuggestedWords(status: .accepted)) ?? []
+            let dismissed = (try? store.listSuggestedWords(status: .dismissed)) ?? []
+            return Set((accepted + dismissed).map { $0.word.lowercased() })
+        }.value
+
+        let dictations = await Task.detached {
+            (try? store.dictationTextsForAnalysis()) ?? []
+        }.value
+        guard !dictations.isEmpty else {
+            loadSuggestedWords()
+            return
+        }
+
+        // Pre-compute the candidate tokens off-main, then run the main-thread-only
+        // spell checker over just those tokens, then finish analysis off-main.
+        let candidates = await Task.detached {
+            WordSuggestionAnalyzer.candidateTokens(
+                dictations: dictations,
+                customWords: customWords,
+                dismissedOrAccepted: resolved
+            )
+        }.value
+
+        let spellCache = spellCheck(tokens: candidates)
+
+        let suggestions = await Task.detached {
+            WordSuggestionAnalyzer.analyze(
+                dictations: dictations,
+                customWords: customWords,
+                dismissedOrAccepted: resolved,
+                isSpelledCorrectly: { spellCache[$0]?.isCorrect ?? false },
+                suggestCorrection: { spellCache[$0]?.correction }
+            )
+        }.value
+
+        await Task.detached {
+            try? store.upsertSuggestedWords(suggestions)
+            // Words still present in the corpus just had last_seen_at refreshed;
+            // pending suggestions not seen for a while age out here.
+            try? store.pruneStalePendingSuggestions(olderThanDays: Self.staleSuggestionMaxAgeDays)
+        }.value
+        loadSuggestedWords()
+    }
+
+    /// Pending suggestions not seen in the recent corpus for this many days are
+    /// aged out on the next analysis run.
+    private static let staleSuggestionMaxAgeDays = 30
+
+    /// Run `NSSpellChecker` (main-thread-only) over the candidate tokens once.
+    private func spellCheck(tokens: [String]) -> [String: (isCorrect: Bool, correction: String?)] {
+        let checker = NSSpellChecker.shared
+        var result: [String: (isCorrect: Bool, correction: String?)] = [:]
+        for token in tokens {
+            let misspelledRange = checker.checkSpelling(of: token, startingAt: 0)
+            let isCorrect = misspelledRange.location == NSNotFound
+            var correction: String? = nil
+            if !isCorrect {
+                let range = NSRange(location: 0, length: (token as NSString).length)
+                correction = checker.correction(
+                    forWordRange: range,
+                    in: token,
+                    language: checker.language(),
+                    inSpellDocumentWithTag: 0
+                )
+            }
+            result[token] = (isCorrect, correction)
+        }
+        return result
+    }
+
+    func acceptSuggestion(_ suggestion: SuggestedWordRecord, replacement: String?) {
+        let target = (replacement?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+            ?? suggestion.replacement
+        addCustomWord(CustomWord(word: suggestion.word, replacement: target))
+        try? dictationStore.setSuggestedWordStatus(id: suggestion.id, status: .accepted)
+        loadSuggestedWords()
+    }
+
+    func dismissSuggestion(_ suggestion: SuggestedWordRecord) {
+        try? dictationStore.setSuggestedWordStatus(id: suggestion.id, status: .dismissed)
+        loadSuggestedWords()
     }
 
     @discardableResult
@@ -5537,6 +5665,7 @@ final class MuesliController: NSObject {
                 endedAt: Date(),
                 asrBackend: BackendOption.nemotronStreaming.identifier
             )
+            scheduleSuggestionAnalysis()
         }
 
         statusBarController?.refresh()
@@ -5642,6 +5771,7 @@ final class MuesliController: NSObject {
                     self.statusBarController?.refresh()
                     self.historyWindowController?.reload()
                     self.syncAppState()
+                    self.scheduleSuggestionAnalysis()
                     if outputMode != .voiceNote {
                         PasteController.paste(text: text)
                     }
