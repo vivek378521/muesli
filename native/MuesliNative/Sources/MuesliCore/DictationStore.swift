@@ -56,9 +56,25 @@ public final class DictationStore {
             source TEXT NOT NULL DEFAULT 'dictation',
             started_at TEXT,
             ended_at TEXT,
+            asr_backend TEXT,
             created_at TEXT DEFAULT (datetime('now'))
         );
         CREATE INDEX IF NOT EXISTS idx_dictations_timestamp ON dictations(timestamp DESC);
+
+        CREATE TABLE IF NOT EXISTS suggested_words (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            word TEXT NOT NULL,
+            replacement TEXT,
+            occurrence_count INTEGER NOT NULL DEFAULT 0,
+            phonetic_variants_json TEXT,
+            backends_json TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            last_seen_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_suggested_words_word ON suggested_words(word);
+        CREATE INDEX IF NOT EXISTS idx_suggested_words_status ON suggested_words(status);
 
         CREATE TABLE IF NOT EXISTS computer_use_traces (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -152,6 +168,15 @@ public final class DictationStore {
         if sqlite3_exec(db, "ALTER TABLE dictations ADD COLUMN source TEXT NOT NULL DEFAULT 'dictation'", nil, nil, nil) != SQLITE_OK {
             // Column may already exist.
         }
+        // Upgrades pre-existing databases where dictations already exists.
+        // Nullable with no default, so ADD COLUMN does not rewrite the table.
+        if sqlite3_exec(db, "ALTER TABLE dictations ADD COLUMN asr_backend TEXT", nil, nil, nil) != SQLITE_OK {
+            // Column may already exist.
+        }
+        // Upgrades pre-existing suggested_words tables created before aging.
+        if sqlite3_exec(db, "ALTER TABLE suggested_words ADD COLUMN last_seen_at TEXT", nil, nil, nil) != SQLITE_OK {
+            // Column may already exist.
+        }
         let _ = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_meetings_folder ON meetings(folder_id)", nil, nil, nil)
     }
 
@@ -162,15 +187,16 @@ public final class DictationStore {
         appContext: String = "",
         source: String = "dictation",
         startedAt: Date,
-        endedAt: Date
+        endedAt: Date,
+        asrBackend: String? = nil
     ) throws -> Int64 {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
 
         let sql = """
         INSERT INTO dictations
-        (timestamp, duration_seconds, raw_text, app_context, word_count, source, started_at, ended_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (timestamp, duration_seconds, raw_text, app_context, word_count, source, started_at, ended_at, asr_backend)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
@@ -189,6 +215,11 @@ public final class DictationStore {
         sqlite3_bind_text(statement, 6, (source as NSString).utf8String, -1, nil)
         sqlite3_bind_text(statement, 7, (started as NSString).utf8String, -1, nil)
         sqlite3_bind_text(statement, 8, (ended as NSString).utf8String, -1, nil)
+        if let asrBackend {
+            sqlite3_bind_text(statement, 9, (asrBackend as NSString).utf8String, -1, nil)
+        } else {
+            sqlite3_bind_null(statement, 9)
+        }
 
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw lastError(db)
@@ -822,6 +853,191 @@ public final class DictationStore {
             sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
             throw error
         }
+    }
+
+    // MARK: - Suggested Words
+
+    /// Raw dictation text + ASR backend for mining word suggestions, newest first.
+    public func dictationTextsForAnalysis(limit: Int = 2000) throws -> [(text: String, backend: String?)] {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+
+        let sql = """
+        SELECT raw_text, asr_backend
+        FROM dictations
+        WHERE source = 'dictation' AND raw_text IS NOT NULL
+        ORDER BY id DESC
+        LIMIT ?
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int(statement, 1, Int32(limit))
+
+        var rows: [(text: String, backend: String?)] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let text = stringColumn(statement, index: 0)
+            let backend: String? = sqlite3_column_type(statement, 1) == SQLITE_NULL ? nil : stringColumn(statement, index: 1)
+            rows.append((text: text, backend: backend))
+        }
+        return rows
+    }
+
+    /// Insert or update suggestions keyed by `word`. Re-upserting refreshes the
+    /// count/variants/backends but never resurrects a dismissed or accepted word
+    /// back to pending.
+    public func upsertSuggestedWords(_ suggestions: [SuggestedWordUpsert]) throws {
+        guard !suggestions.isEmpty else { return }
+
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        guard sqlite3_exec(db, "BEGIN TRANSACTION", nil, nil, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+
+        do {
+            let sql = """
+            INSERT INTO suggested_words
+            (word, replacement, occurrence_count, phonetic_variants_json, backends_json, status, updated_at, last_seen_at)
+            VALUES (?, ?, ?, ?, ?, 'pending', datetime('now'), datetime('now'))
+            ON CONFLICT(word) DO UPDATE SET
+                replacement = excluded.replacement,
+                occurrence_count = excluded.occurrence_count,
+                phonetic_variants_json = excluded.phonetic_variants_json,
+                backends_json = excluded.backends_json,
+                updated_at = datetime('now'),
+                last_seen_at = datetime('now')
+            """
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+                throw lastError(db)
+            }
+            defer { sqlite3_finalize(statement) }
+
+            for suggestion in suggestions {
+                sqlite3_reset(statement)
+                sqlite3_clear_bindings(statement)
+                let variantsJSON = Self.encodeJSONArray(suggestion.phoneticVariants)
+                let backendsJSON = Self.encodeJSONArray(suggestion.backends)
+                sqlite3_bind_text(statement, 1, (suggestion.word as NSString).utf8String, -1, nil)
+                if let replacement = suggestion.replacement {
+                    sqlite3_bind_text(statement, 2, (replacement as NSString).utf8String, -1, nil)
+                } else {
+                    sqlite3_bind_null(statement, 2)
+                }
+                sqlite3_bind_int(statement, 3, Int32(suggestion.occurrenceCount))
+                sqlite3_bind_text(statement, 4, (variantsJSON as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(statement, 5, (backendsJSON as NSString).utf8String, -1, nil)
+                guard sqlite3_step(statement) == SQLITE_DONE else {
+                    throw lastError(db)
+                }
+            }
+
+            guard sqlite3_exec(db, "COMMIT", nil, nil, nil) == SQLITE_OK else {
+                throw lastError(db)
+            }
+        } catch {
+            sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+            throw error
+        }
+    }
+
+    public func listSuggestedWords(status: SuggestedWordStatus) throws -> [SuggestedWordRecord] {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+
+        let sql = """
+        SELECT id, word, replacement, occurrence_count, phonetic_variants_json, backends_json, status, created_at, updated_at
+        FROM suggested_words
+        WHERE status = ?
+        ORDER BY occurrence_count DESC, word ASC
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, (status.rawValue as NSString).utf8String, -1, nil)
+
+        var rows: [SuggestedWordRecord] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let replacement: String? = sqlite3_column_type(statement, 2) == SQLITE_NULL ? nil : stringColumn(statement, index: 2)
+            rows.append(SuggestedWordRecord(
+                id: sqlite3_column_int64(statement, 0),
+                word: stringColumn(statement, index: 1),
+                replacement: replacement,
+                occurrenceCount: Int(sqlite3_column_int(statement, 3)),
+                phoneticVariants: Self.decodeJSONArray(stringColumn(statement, index: 4)),
+                backends: Self.decodeJSONArray(stringColumn(statement, index: 5)),
+                status: SuggestedWordStatus(rawValue: stringColumn(statement, index: 6)) ?? .pending,
+                createdAt: stringColumn(statement, index: 7),
+                updatedAt: stringColumn(statement, index: 8)
+            ))
+        }
+        return rows
+    }
+
+    public func setSuggestedWordStatus(id: Int64, status: SuggestedWordStatus) throws {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+
+        let sql = "UPDATE suggested_words SET status = ?, updated_at = datetime('now') WHERE id = ?"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, (status.rawValue as NSString).utf8String, -1, nil)
+        sqlite3_bind_int64(statement, 2, id)
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw lastError(db)
+        }
+    }
+
+    /// Delete pending suggestions not seen in the recent corpus for `days` days.
+    /// Only `pending` rows are aged out — accepted/dismissed rows are user
+    /// decisions and are kept regardless of age. Returns the number pruned.
+    @discardableResult
+    public func pruneStalePendingSuggestions(olderThanDays days: Int) throws -> Int {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+
+        let sql = """
+        DELETE FROM suggested_words
+        WHERE status = 'pending'
+          AND last_seen_at IS NOT NULL
+          AND last_seen_at < datetime('now', ?)
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        let modifier = "-\(max(0, days)) days"
+        sqlite3_bind_text(statement, 1, (modifier as NSString).utf8String, -1, nil)
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw lastError(db)
+        }
+        return Int(sqlite3_changes(db))
+    }
+
+    private static func encodeJSONArray(_ values: [String]) -> String {
+        guard let data = try? JSONEncoder().encode(values),
+              let json = String(data: data, encoding: .utf8) else {
+            return "[]"
+        }
+        return json
+    }
+
+    private static func decodeJSONArray(_ json: String) -> [String] {
+        guard !json.isEmpty,
+              let data = json.data(using: .utf8),
+              let values = try? JSONDecoder().decode([String].self, from: data) else {
+            return []
+        }
+        return values
     }
 
     public func liveTranscriptCheckpointText(meetingID: Int64) throws -> String? {

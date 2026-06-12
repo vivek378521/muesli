@@ -272,6 +272,74 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
     }
 }
 
+public enum SuggestedWordStatus: String, Codable, Sendable {
+    case pending
+    case accepted
+    case dismissed
+}
+
+/// A word mined from past dictations that is a candidate for the personal
+/// dictionary. `word` is the match side (what transcription produced);
+/// `replacement` is the proposed corrected spelling.
+public struct SuggestedWordRecord: Identifiable, Codable, Sendable {
+    public let id: Int64
+    public let word: String
+    public let replacement: String?
+    public let occurrenceCount: Int
+    /// Other near-duplicate spellings collapsed into this suggestion.
+    public let phoneticVariants: [String]
+    /// Distinct ASR backend identifiers ("backend:model") that produced this word.
+    public let backends: [String]
+    public let status: SuggestedWordStatus
+    public let createdAt: String
+    public let updatedAt: String
+
+    public init(
+        id: Int64,
+        word: String,
+        replacement: String?,
+        occurrenceCount: Int,
+        phoneticVariants: [String],
+        backends: [String],
+        status: SuggestedWordStatus,
+        createdAt: String,
+        updatedAt: String
+    ) {
+        self.id = id
+        self.word = word
+        self.replacement = replacement
+        self.occurrenceCount = occurrenceCount
+        self.phoneticVariants = phoneticVariants
+        self.backends = backends
+        self.status = status
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+/// Write payload for upserting a mined suggestion. Keyed by `word`.
+public struct SuggestedWordUpsert: Sendable, Equatable {
+    public let word: String
+    public let replacement: String?
+    public let occurrenceCount: Int
+    public let phoneticVariants: [String]
+    public let backends: [String]
+
+    public init(
+        word: String,
+        replacement: String?,
+        occurrenceCount: Int,
+        phoneticVariants: [String],
+        backends: [String]
+    ) {
+        self.word = word
+        self.replacement = replacement
+        self.occurrenceCount = occurrenceCount
+        self.phoneticVariants = phoneticVariants
+        self.backends = backends
+    }
+}
+
 public struct MeetingFolder: Identifiable, Codable, Sendable {
     public let id: Int64
     public var name: String
