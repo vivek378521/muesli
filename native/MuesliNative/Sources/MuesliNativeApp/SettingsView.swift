@@ -471,6 +471,12 @@ struct SettingsView: View {
                     }
                 }
                 screenContextRow("App context")
+                Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow("Learn corrections from clipboard edits") {
+                    settingsSwitch(isOn: appState.config.enableClipboardCorrectionTracking) { newValue in
+                        controller.updateConfig { $0.enableClipboardCorrectionTracking = newValue }
+                    }
+                }
             }
         }
     }
