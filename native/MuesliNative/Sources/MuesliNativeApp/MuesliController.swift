@@ -4700,7 +4700,8 @@ final class MuesliController: NSObject {
                     durationSeconds: duration,
                     source: "cua",
                     startedAt: startedAt,
-                    endedAt: commandEndedAt
+                    endedAt: commandEndedAt,
+                    asrBackend: self.selectedBackend.identifier
                 )
                 await self.handleComputerUseCommand(transcript: text, dictationID: dictationID)
             } catch is CancellationError {
@@ -5533,7 +5534,8 @@ final class MuesliController: NSObject {
                 text: cleaned,
                 durationSeconds: duration,
                 startedAt: startedAt,
-                endedAt: Date()
+                endedAt: Date(),
+                asrBackend: BackendOption.nemotronStreaming.identifier
             )
         }
 
@@ -5632,7 +5634,8 @@ final class MuesliController: NSObject {
                     durationSeconds: duration,
                     appContext: storageContext,
                     startedAt: startedAt,
-                    endedAt: Date()
+                    endedAt: Date(),
+                    asrBackend: transcriptionBackend.identifier
                 )
                 await MainActor.run {
                     self.capturedDictationContext = nil

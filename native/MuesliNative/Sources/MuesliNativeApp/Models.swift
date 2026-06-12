@@ -10,6 +10,11 @@ struct BackendOption: Equatable {
     let description: String
     let recommended: Bool
 
+    /// Stable identifier persisted per dictation to track which ASR model produced it.
+    var identifier: String {
+        "\(backend):\(model)"
+    }
+
     static let parakeetMultilingual = BackendOption(
         backend: "fluidaudio",
         model: "FluidInference/parakeet-tdt-0.6b-v3-coreml",
