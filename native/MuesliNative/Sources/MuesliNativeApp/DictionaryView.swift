@@ -21,12 +21,59 @@ struct DictionaryView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing24) {
                 header
+                if !appState.suggestedWords.isEmpty {
+                    suggestedWordsSection
+                }
                 wordList
             }
             .padding(MuesliTheme.spacing32)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(MuesliTheme.backgroundBase)
+    }
+
+    private var suggestedWordsSection: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+            HStack {
+                Text("Suggested Words (\(appState.suggestedWords.count))")
+                    .font(MuesliTheme.headline())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                Spacer()
+                Button {
+                    Task { await controller.analyzeSuggestions() }
+                } label: {
+                    HStack(spacing: 4) {
+                        if appState.isAnalyzingSuggestions {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 11, weight: .bold))
+                        }
+                        Text("Refresh")
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                }
+                .buttonStyle(.plain)
+                .disabled(appState.isAnalyzingSuggestions)
+            }
+            Text("Words that came up often in your dictations and aren't in your dictionary yet. Accept to add a correction rule, or dismiss to hide it.")
+                .font(MuesliTheme.body())
+                .foregroundStyle(MuesliTheme.textSecondary)
+
+            VStack(spacing: 0) {
+                ForEach(appState.suggestedWords) { suggestion in
+                    SuggestedWordRow(suggestion: suggestion, controller: controller)
+                    Divider().background(MuesliTheme.surfaceBorder)
+                }
+            }
+            .background(MuesliTheme.backgroundRaised)
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+            .overlay(
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                    .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+            )
+        }
     }
 
     private var header: some View {
@@ -243,6 +290,73 @@ private struct DictionaryWordEditorRow: View {
                 weight: .regular
             ) {
                 controller.removeCustomWord(id: word.id)
+            }
+        }
+        .padding(.horizontal, MuesliTheme.spacing16)
+        .padding(.vertical, MuesliTheme.spacing12)
+    }
+}
+
+private struct SuggestedWordRow: View {
+    let suggestion: SuggestedWordRecord
+    let controller: MuesliController
+
+    @State private var draftReplacement: String
+
+    init(suggestion: SuggestedWordRecord, controller: MuesliController) {
+        self.suggestion = suggestion
+        self.controller = controller
+        _draftReplacement = State(initialValue: suggestion.replacement ?? suggestion.word)
+    }
+
+    private var metadataText: String {
+        var parts = ["appeared \(suggestion.occurrenceCount) time\(suggestion.occurrenceCount == 1 ? "" : "s")"]
+        if !suggestion.backends.isEmpty {
+            parts.append("models: \(suggestion.backends.map(Self.modelLabel).joined(separator: ", "))")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Turn a stored "backend:model" identifier into a short human label.
+    private static func modelLabel(_ identifier: String) -> String {
+        BackendOption.all.first { $0.identifier == identifier }?.label
+            ?? identifier.components(separatedBy: ":").first
+            ?? identifier
+    }
+
+    var body: some View {
+        HStack(spacing: MuesliTheme.spacing8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(suggestion.word)
+                    .font(MuesliTheme.captionMedium())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                Text(metadataText)
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Image(systemName: "arrow.right")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(MuesliTheme.textTertiary)
+                .frame(width: DictionaryRowMetrics.arrowWidth)
+            TextField("Replace with", text: $draftReplacement)
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: .infinity)
+
+            DictionaryIconButton(
+                systemName: "checkmark",
+                label: "Accept suggestion",
+                tint: MuesliTheme.accent
+            ) {
+                controller.acceptSuggestion(suggestion, replacement: draftReplacement)
+            }
+            DictionaryIconButton(
+                systemName: "xmark",
+                label: "Dismiss suggestion",
+                tint: MuesliTheme.textTertiary
+            ) {
+                controller.dismissSuggestion(suggestion)
             }
         }
         .padding(.horizontal, MuesliTheme.spacing16)
