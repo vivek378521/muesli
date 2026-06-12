@@ -1621,9 +1621,18 @@ final class MuesliController: NSObject {
             )
         }.value
 
-        await Task.detached { try? store.upsertSuggestedWords(suggestions) }.value
+        await Task.detached {
+            try? store.upsertSuggestedWords(suggestions)
+            // Words still present in the corpus just had last_seen_at refreshed;
+            // pending suggestions not seen for a while age out here.
+            try? store.pruneStalePendingSuggestions(olderThanDays: Self.staleSuggestionMaxAgeDays)
+        }.value
         loadSuggestedWords()
     }
+
+    /// Pending suggestions not seen in the recent corpus for this many days are
+    /// aged out on the next analysis run.
+    private static let staleSuggestionMaxAgeDays = 30
 
     /// Run `NSSpellChecker` (main-thread-only) over the candidate tokens once.
     private func spellCheck(tokens: [String]) -> [String: (isCorrect: Bool, correction: String?)] {

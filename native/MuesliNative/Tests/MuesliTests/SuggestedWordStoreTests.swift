@@ -124,6 +124,67 @@ struct SuggestedWordStoreTests {
         #expect(try store.listSuggestedWords(status: .accepted).isEmpty)
     }
 
+    /// Force a row's last_seen_at into the past so aging can be tested.
+    private func backdateLastSeen(_ store: DictationStore, word: String, days: Int) throws {
+        var db: OpaquePointer?
+        #expect(sqlite3_open(store.resolvedDatabaseURL.path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+        let sql = "UPDATE suggested_words SET last_seen_at = datetime('now', '-\(days) days') WHERE word = '\(word)'"
+        #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK)
+    }
+
+    @Test("prune removes pending suggestions not seen recently")
+    func pruneStalePending() throws {
+        let store = try makeStore()
+        try store.upsertSuggestedWords([upsert("stale"), upsert("fresh")])
+        try backdateLastSeen(store, word: "stale", days: 45)
+
+        let pruned = try store.pruneStalePendingSuggestions(olderThanDays: 30)
+        #expect(pruned == 1)
+        let pending = try store.listSuggestedWords(status: .pending)
+        #expect(pending.map(\.word) == ["fresh"])
+    }
+
+    @Test("prune leaves recently-seen pending suggestions")
+    func pruneKeepsFresh() throws {
+        let store = try makeStore()
+        try store.upsertSuggestedWords([upsert("recent")])
+        try backdateLastSeen(store, word: "recent", days: 10)
+        let pruned = try store.pruneStalePendingSuggestions(olderThanDays: 30)
+        #expect(pruned == 0)
+        #expect(try store.listSuggestedWords(status: .pending).count == 1)
+    }
+
+    @Test("prune never ages out accepted or dismissed suggestions")
+    func pruneSparesDecidedWords() throws {
+        let store = try makeStore()
+        try store.upsertSuggestedWords([upsert("accepted"), upsert("dismissed")])
+        let words = try store.listSuggestedWords(status: .pending)
+        let acceptedID = try #require(words.first { $0.word == "accepted" }?.id)
+        let dismissedID = try #require(words.first { $0.word == "dismissed" }?.id)
+        try store.setSuggestedWordStatus(id: acceptedID, status: .accepted)
+        try store.setSuggestedWordStatus(id: dismissedID, status: .dismissed)
+        try backdateLastSeen(store, word: "accepted", days: 365)
+        try backdateLastSeen(store, word: "dismissed", days: 365)
+
+        let pruned = try store.pruneStalePendingSuggestions(olderThanDays: 30)
+        #expect(pruned == 0)
+        #expect(try store.listSuggestedWords(status: .accepted).count == 1)
+        #expect(try store.listSuggestedWords(status: .dismissed).count == 1)
+    }
+
+    @Test("re-upserting a stale word refreshes last_seen and saves it from pruning")
+    func upsertRefreshesLastSeen() throws {
+        let store = try makeStore()
+        try store.upsertSuggestedWords([upsert("revived")])
+        try backdateLastSeen(store, word: "revived", days: 60)
+        // Seen again in a new analysis run -> last_seen_at bumped to now.
+        try store.upsertSuggestedWords([upsert("revived", count: 5)])
+        let pruned = try store.pruneStalePendingSuggestions(olderThanDays: 30)
+        #expect(pruned == 0)
+        #expect(try store.listSuggestedWords(status: .pending).first?.occurrenceCount == 5)
+    }
+
     @Test("setSuggestedWordStatus moves a word between buckets")
     func setStatus() throws {
         let store = try makeStore()

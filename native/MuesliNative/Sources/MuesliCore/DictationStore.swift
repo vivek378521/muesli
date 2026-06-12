@@ -70,7 +70,8 @@ public final class DictationStore {
             backends_json TEXT,
             status TEXT NOT NULL DEFAULT 'pending',
             created_at TEXT DEFAULT (datetime('now')),
-            updated_at TEXT DEFAULT (datetime('now'))
+            updated_at TEXT DEFAULT (datetime('now')),
+            last_seen_at TEXT DEFAULT (datetime('now'))
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_suggested_words_word ON suggested_words(word);
         CREATE INDEX IF NOT EXISTS idx_suggested_words_status ON suggested_words(status);
@@ -170,6 +171,10 @@ public final class DictationStore {
         // Upgrades pre-existing databases where dictations already exists.
         // Nullable with no default, so ADD COLUMN does not rewrite the table.
         if sqlite3_exec(db, "ALTER TABLE dictations ADD COLUMN asr_backend TEXT", nil, nil, nil) != SQLITE_OK {
+            // Column may already exist.
+        }
+        // Upgrades pre-existing suggested_words tables created before aging.
+        if sqlite3_exec(db, "ALTER TABLE suggested_words ADD COLUMN last_seen_at TEXT", nil, nil, nil) != SQLITE_OK {
             // Column may already exist.
         }
         let _ = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_meetings_folder ON meetings(folder_id)", nil, nil, nil)
@@ -895,14 +900,15 @@ public final class DictationStore {
         do {
             let sql = """
             INSERT INTO suggested_words
-            (word, replacement, occurrence_count, phonetic_variants_json, backends_json, status, updated_at)
-            VALUES (?, ?, ?, ?, ?, 'pending', datetime('now'))
+            (word, replacement, occurrence_count, phonetic_variants_json, backends_json, status, updated_at, last_seen_at)
+            VALUES (?, ?, ?, ?, ?, 'pending', datetime('now'), datetime('now'))
             ON CONFLICT(word) DO UPDATE SET
                 replacement = excluded.replacement,
                 occurrence_count = excluded.occurrence_count,
                 phonetic_variants_json = excluded.phonetic_variants_json,
                 backends_json = excluded.backends_json,
-                updated_at = datetime('now')
+                updated_at = datetime('now'),
+                last_seen_at = datetime('now')
             """
             var statement: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
@@ -988,6 +994,33 @@ public final class DictationStore {
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw lastError(db)
         }
+    }
+
+    /// Delete pending suggestions not seen in the recent corpus for `days` days.
+    /// Only `pending` rows are aged out — accepted/dismissed rows are user
+    /// decisions and are kept regardless of age. Returns the number pruned.
+    @discardableResult
+    public func pruneStalePendingSuggestions(olderThanDays days: Int) throws -> Int {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+
+        let sql = """
+        DELETE FROM suggested_words
+        WHERE status = 'pending'
+          AND last_seen_at IS NOT NULL
+          AND last_seen_at < datetime('now', ?)
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        let modifier = "-\(max(0, days)) days"
+        sqlite3_bind_text(statement, 1, (modifier as NSString).utf8String, -1, nil)
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw lastError(db)
+        }
+        return Int(sqlite3_changes(db))
     }
 
     private static func encodeJSONArray(_ values: [String]) -> String {
